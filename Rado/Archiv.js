@@ -45,7 +45,7 @@ function importArchivKomplett() {
   const formattedVorgangsArten = archivArten.map(art => ({ string: art }));
 
   const query = `
-    query GetArchivRado($vorgangsArten: [FilterValue!]!, $cursor: String, $startDatum: DateTime!, $vtrNr: String!) {
+    query GetArchivRobin($vorgangsArten: [FilterValue!]!, $cursor: String, $startDatum: DateTime!, $vtrNr: String!) {
       tblVorgangArchiv {
         conRead(first: 100, after: $cursor, fastFilter: { and: [ { ge: [{ field: fldErstDat }, { value: { datetime: $startDatum } }] }, { in: { field: fldArt, values: $vorgangsArten } }, { eq: [{ field: fldVtrNr }, { value: { string: $vtrNr } }] } ] }) {
           edges { node { fldAdrNr fldArt fldAuftrNr fldBelegNr fldDat fldReNa2 fldReNa3 fldReLandBez fldLiLandBez fldZahlBed rowsPositions { fldArtNr fldMge fldEPrNt fldAbrPosKz rowArtikel { fldKuBez1 fldKuBez3 } } } }
