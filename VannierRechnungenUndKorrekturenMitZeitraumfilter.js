@@ -87,7 +87,6 @@ function fetchVannierData() {
                 fldAbrPosKz
                 rowArtikel {
                   fldKuBez1
-                  fldEkRoh
                 }
               }
             }
@@ -119,8 +118,9 @@ function fetchVannierData() {
     "fldMge", 
     "fldEPrNt", 
     "fldGesamtNetto",
-    "fldEkRoh",
+    "fldEEkRoh",
     "fldEkRohGesamt",
+    "fldRoherloes",
     "fldOMge",
     "fldMemo"
   ];
@@ -176,7 +176,9 @@ function fetchVannierData() {
 
           let mge = pos.fldMge || 0;
           let eprNt = pos.fldEPrNt || 0;
-          const ekRoh = Number(pos.rowArtikel?.fldEkRoh) || 0;
+          
+          // WICHTIG: Einzel-EK für Roherlös direkt von der Belegposition nehmen
+          let eekRoh = pos.fldEEkRoh || 0;
 
           // Positions-Bezeichnung auf max. 120 Zeichen beschränken
           let descText = Array.isArray(pos.fldBez) ? pos.fldBez.join(" ") : (pos.fldBez || "");
@@ -186,17 +188,18 @@ function fetchVannierData() {
 
           const descDE = pos.rowArtikel?.fldKuBez1 || "";
 
-          // RECHNUNGSKORREKTUR / GUTSCHRIFT (Vorgangsart 123 oder BelegNr "123...")
+          // RECHNUNGSKORREKTUR / GUTSCHRIFT (Vorgangsart 123 oder BelegNr beginnt mit "123")
           const istGutschrift = (artCode === "123" || belegNr.startsWith("123"));
 
-          // Falls büro+ die Menge bei Gutschriften noch positiv liefert, kehren wir das Vorzeichen der Menge um
-          if (istGutschrift && mge > 0) {
-            mge = -mge;
+          // Bei Gutschriften die Menge konsequent negativ erzwingen
+          if (istGutschrift) {
+            mge = -Math.abs(mge);
           }
 
-          // Reine Multiplikation bewahrt das korrekte Vorzeichen der Datenbank
+          // Kaufmännische Gesamtwert- und Roherlösberechnung
           const gesamtNetto = mge * eprNt;
-          const ekRohGesamt = ekRoh * mge;
+          const ekRohGesamt = mge * eekRoh;
+          const roherloes = gesamtNetto - ekRohGesamt;
 
           allRows.push([
             String(node.fldAdrNr || ""),
@@ -216,8 +219,9 @@ function fetchVannierData() {
             mge,
             eprNt,
             gesamtNetto,
-            ekRoh,
+            eekRoh,
             ekRohGesamt,
+            roherloes,
             pos.fldOMge || 0,
             String(node.fldMemo || "")
           ]);
@@ -235,7 +239,7 @@ function fetchVannierData() {
 
   // --- 4. ERGEBNISSE SCHREIBEN UND FORMATIEREN ---
   if (allRows.length === 1) {
-    sheet.getRange(1, 1).setValue("Keine Archiv-Vorgänge für Kunde 3114158 seit 01.01.2025 gefunden.");
+    sheet.getRange(1, 1).setValue("Keine Archiv-Vorgänge für Kunde 3114158 seit 01.01.2024 gefunden.");
     return;
   }
 
@@ -252,8 +256,8 @@ function fetchVannierData() {
     sheet.getRange(2, 6, totalRows - 1, 1).setNumberFormat("yyyy-mm-dd");     // fldDat
     sheet.getRange(2, 15, totalRows - 1, 1).setNumberFormat("#,##0.00");      // fldMge
     sheet.getRange(2, 16, totalRows - 1, 2).setNumberFormat("#,##0.00 €");    // fldEPrNt & fldGesamtNetto
-    sheet.getRange(2, 18, totalRows - 1, 2).setNumberFormat("#,##0.00 €");    // fldEkRoh & fldEkRohGesamt
-    sheet.getRange(2, 20, totalRows - 1, 1).setNumberFormat("#,##0.00");      // fldOMge
+    sheet.getRange(2, 18, totalRows - 1, 3).setNumberFormat("#,##0.00 €");    // fldEEkRoh, fldEkRohGesamt & fldRoherloes
+    sheet.getRange(2, 21, totalRows - 1, 1).setNumberFormat("#,##0.00");      // fldOMge
   }
 
   const headerRange = sheet.getRange(1, 1, 1, totalCols);
