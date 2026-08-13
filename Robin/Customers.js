@@ -171,9 +171,16 @@ function fetchCustomers() {
     }
   }
 
-  // --- STEP 3: Write raw data to sheet ---
+  // --- STEP 3: Sort & Write data to sheet ---
   if (allRows.length > 0) {
+    // Sort array descending by "Sales Current Year" (Index 9)
+    allRows.sort((a, b) => b[9] - a[9]);
+
+    // Write rows starting at row 2
     sheet.getRange(2, 1, allRows.length, headers.length).setValues(allRows);
+
+    // Format sales columns (Column 10 & 11) as EUR currency
+    sheet.getRange(2, 10, allRows.length, 2).setNumberFormat('#,##0.00 "€"');
 
     SpreadsheetApp.getActiveSpreadsheet().toast(
       "Successfully loaded " + allRows.length + " customers with sales history!", 

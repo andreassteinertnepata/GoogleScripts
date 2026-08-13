@@ -18,6 +18,9 @@ function main() {
     showStatusBox("Update Running", "Loading history data...");
     importArchivKomplett();
     
+    showStatusBox("Update Running", "Loading customer data...");
+    fetchCustomers() 
+    
     showStatusBox("Translating", "Cells and headers...");
     translateHeadersFromExternalSheet();
     translateValuesFromExternalSheet();

@@ -13,7 +13,9 @@ function main() {
     showStatusBox("Update Running", "Loading item data...");
     fetchArticles();
     fetchStuecklisten() 
-
+    
+    showStatusBox("Update Running", "Loading customer data...");
+    fetchCustomers() 
 
     showStatusBox("Update Running", "Loading history data...");
     importArchivKomplett();
