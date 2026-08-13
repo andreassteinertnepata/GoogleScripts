@@ -1,7 +1,7 @@
 /**
  * Customers.gs
  * Fetches customer data and links aggregated annual sales totals (Current Year & Previous Year)
- * directly via a dedicated GraphQL query to tblVorgangArchiv.
+ * directly via a dedicated GraphQL query to tblVorgangArchiv using fastFilter.
  */
 
 function fetchCustomers() {
@@ -9,7 +9,7 @@ function fetchCustomers() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(BLATT_NAME);
 
-  // 1. Prepare Sheet (Clear content & filters, no styling)
+  // 1. Prepare Sheet
   if (sheet) {
     if (sheet.getFilter()) {
       sheet.getFilter().remove();
@@ -19,7 +19,7 @@ function fetchCustomers() {
     sheet = ss.insertSheet(BLATT_NAME);
   }
 
-  // Header definition (English, no "AbwArtDatGrp", "Land" instead of "LandBez", no "Vertreter")
+  // Header definition
   const headers = [
     "AdrNr", "KredLimit", "VtrNr", 
     "Name2", "Name3", "Land", "EMail1", "EMail2",
@@ -31,10 +31,11 @@ function fetchCustomers() {
   const currentYear = new Date().getFullYear();
   const previousYear = currentYear - 1;
   const startDateISO = previousYear + "-01-01T00:00:00Z";
+  const vtrNr = CONFIG.VERTRETER_NR || "56";
 
-  // --- STEP 1: Fetch and aggregate historical sales via separate query ---
-  Logger.log("Fetching archived sales data starting from " + startDateISO + "...");
-  const salesMap = fetchCustomerSalesData(startDateISO, currentYear, previousYear);
+  // --- STEP 1: Fetch and aggregate historical sales via fastFilter (Filtered by Representative) ---
+  Logger.log("Fetching archived sales data for representative " + vtrNr + " starting from " + startDateISO + "...");
+  const salesMap = fetchCustomerSalesData(startDateISO, currentYear, previousYear, vtrNr);
 
   // --- STEP 2: Fetch Customer Addresses ---
   const queryAdressen = `
@@ -80,8 +81,6 @@ function fetchCustomers() {
   const MAX_PAGES = 500;
   const verarbeiteteKunden = new Set();
 
-  Logger.log("Fetching customers for representative " + CONFIG.VERTRETER_NR + "...");
-
   while (hasNextPage && pageCount < MAX_PAGES) {
     pageCount++;
 
@@ -89,7 +88,7 @@ function fetchCustomers() {
       query: queryAdressen,
       variables: {
         cursor: cursor,
-        vtrNr: CONFIG.VERTRETER_NR || "56"
+        vtrNr: vtrNr
       }
     };
 
@@ -102,7 +101,7 @@ function fetchCustomers() {
     };
 
     try {
-      const response = UrlFetchApp.fetch(CONFIG.API_URL, options);
+      const response = UrlFetchApp.fetch(CONFIG.API_URL || "https://datahub.launchpad.nepata.cloud/v2/nepata_vertrieb/graphql", options);
 
       if (response.getResponseCode() !== 200) {
         Logger.log("API Error: " + response.getContentText());
@@ -150,7 +149,7 @@ function fetchCustomers() {
           node.fldVtrNr || "",
           inner.fldNa2 || "",
           inner.fldNa3 || "",
-          inner.fldLandBez || "", // Land
+          inner.fldLandBez || "",
           inner.fldEMail1 || "",
           inner.fldEMail2 || "",
           mappedType,
@@ -182,25 +181,20 @@ function fetchCustomers() {
     // Format sales columns (Column 10 & 11) as EUR currency
     sheet.getRange(2, 10, allRows.length, 2).setNumberFormat('#,##0.00 "€"');
 
-    SpreadsheetApp.getActiveSpreadsheet().toast(
-      "Successfully loaded " + allRows.length + " customers with sales history!", 
-      "Finished", 
-      5
-    );
+  
   } else {
     SpreadsheetApp.getActiveSpreadsheet().toast("No customers found.", "Notice", 5);
   }
 }
 
 /**
- * Separate dedicated GraphQL query to tblVorgangArchiv to fetch full historical sales 
- * for current and previous years (bypassing the 90-day limitation of the local sheet).
+ * Dedicated GraphQL query to tblVorgangArchiv with fastFilter on both Date, Document Types AND Representative!
  */
-function fetchCustomerSalesData(startDateISO, currentYear, previousYear) {
+function fetchCustomerSalesData(startDateISO, currentYear, previousYear, vtrNr) {
   const salesMap = new Map();
 
   const queryArchiv = `
-    query GetSalesHistory($cursor: String, $jahrStart: DateTime!) {
+    query GetSalesHistory($cursor: String, $jahrStart: DateTime!, $vtrNr: String!) {
       tblVorgangArchiv {
         conRead(
           first: 100,
@@ -208,6 +202,7 @@ function fetchCustomerSalesData(startDateISO, currentYear, previousYear) {
           fastFilter: {
             and: [
               { ge: [{ field: fldErstDat }, { value: { datetime: $jahrStart } }] },
+              { eq: [{ field: fldVtrNr }, { value: { string: $vtrNr } }] },
               { in: { 
                   field: fldArt, 
                   values: [
@@ -250,7 +245,8 @@ function fetchCustomerSalesData(startDateISO, currentYear, previousYear) {
       query: queryArchiv,
       variables: {
         cursor: cursor,
-        jahrStart: startDateISO
+        jahrStart: startDateISO,
+        vtrNr: vtrNr
       }
     };
 
@@ -263,7 +259,7 @@ function fetchCustomerSalesData(startDateISO, currentYear, previousYear) {
     };
 
     try {
-      const response = UrlFetchApp.fetch(CONFIG.API_URL, options);
+      const response = UrlFetchApp.fetch(CONFIG.API_URL || "https://datahub.launchpad.nepata.cloud/v2/nepata_vertrieb/graphql", options);
       if (response.getResponseCode() !== 200) break;
 
       const json = JSON.parse(response.getContentText());

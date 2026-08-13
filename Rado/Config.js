@@ -6,6 +6,8 @@ const CONFIG = {
   API_URL: "https://datahub.launchpad.nepata.cloud/v2/nepata_vertrieb/graphql",
   API_TOKEN: "e12Bfv!@Ss#asrpPFjucm8a8",
 
+  
+
   // --- Benutzer & Filter ---
   VERTRETER_NR: "60",
   AUSGESCHLOSSENE_ADRESSEN: [],                   // IDs eintragen, um Kunden zu ignorieren
