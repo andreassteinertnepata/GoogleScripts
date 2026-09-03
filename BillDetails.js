@@ -179,6 +179,7 @@ function fetchUKOrders() {
   sheet.getRange("A:F").setNumberFormat("@"); // Identifiers as Text
   sheet.getRange("I:L").setNumberFormat("@"); // Order Blocked & Customer Details
   sheet.getRange("M:O").setNumberFormat("@"); // Article details
+  
   sheet.getRange("T:U").setNumberFormat("@"); // Warehouse / Billed Status
 
   const range = sheet.getRange(1, 1, totalRows, totalCols);
