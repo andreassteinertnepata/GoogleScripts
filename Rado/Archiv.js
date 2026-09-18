@@ -44,11 +44,36 @@ function importArchivKomplett() {
   const START_DATUM = vor90Tagen.toISOString();
   const formattedVorgangsArten = archivArten.map(art => ({ string: art }));
 
+  // NEU: fldStorniertKz im Query hinzugefügt, um Stornos auszuschließen
   const query = `
     query GetArchivRobin($vorgangsArten: [FilterValue!]!, $cursor: String, $startDatum: DateTime!, $vtrNr: String!) {
       tblVorgangArchiv {
-        conRead(first: 100, after: $cursor, fastFilter: { and: [ { ge: [{ field: fldErstDat }, { value: { datetime: $startDatum } }] }, { in: { field: fldArt, values: $vorgangsArten } }, { eq: [{ field: fldVtrNr }, { value: { string: $vtrNr } }] } ] }) {
-          edges { node { fldAdrNr fldArt fldAuftrNr fldBelegNr fldDat fldReNa2 fldReNa3 fldReLandBez fldLiLandBez fldZahlBed rowsPositions { fldArtNr fldMge fldEPrNt fldAbrPosKz rowArtikel { fldKuBez1 fldKuBez3 } } } }
+        conRead(first: 100, after: $cursor, fastFilter: { and: [ { ge: [{ field: fldDat }, { value: { datetime: $startDatum } }] }, { in: { field: fldArt, values: $vorgangsArten } }, { eq: [{ field: fldVtrNr }, { value: { string: $vtrNr } }] } ] }) {
+          edges { 
+            node { 
+              fldAdrNr 
+              fldArt 
+              fldAuftrNr 
+              fldBelegNr 
+              fldDat 
+              fldReNa2 
+              fldReNa3 
+              fldReLandBez 
+              fldLiLandBez 
+              fldZahlBed
+              fldStorniertKz 
+              rowsPositions { 
+                fldArtNr 
+                fldMge 
+                fldEPrNt 
+                fldAbrPosKz 
+                rowArtikel { 
+                  fldKuBez1 
+                  fldKuBez3 
+                } 
+              } 
+            } 
+          }
           pageInfo { hasNextPage endCursor }
         }
       }
@@ -70,15 +95,32 @@ function importArchivKomplett() {
       const json = JSON.parse(response.getContentText());
       if (json.errors) break;
       const conRead = json.data?.tblVorgangArchiv?.conRead || {};
+      
       (conRead.edges || []).forEach(edge => {
         const node = edge.node || {};
+        
+        // NEU: Stornierte Belege komplett ignorieren
+        if (node.fldStorniertKz === true) {
+          return;
+        }
+
         const artCode = String(node.fldArt || "").trim();
         const belegNr = String(node.fldBelegNr || "").trim();
+        
+        // NEU: Erweiterte Liste aller kaufmännischen Korrekturen, die negativ summiert werden müssen
+        const isKorrektur = ["123", "90", "156"].includes(artCode);
+
         (node.rowsPositions || []).forEach(pos => {
           if (pos.fldAbrPosKz !== true) return;
+          
           let mge = pos.fldMge || 0;
           let eprNt = pos.fldEPrNt || 0;
-          if (artCode === "123" || belegNr.startsWith("123")) { eprNt = Math.abs(eprNt); mge = -Math.abs(mge); }
+          
+          // Korrigierte Vorzeichenlogik
+          if (isKorrektur) { 
+            eprNt = Math.abs(eprNt); 
+            mge = -Math.abs(mge); 
+          }
           
           allRows.push([
             String(node.fldAdrNr || ""), vorgangsartenMap.get(artCode) || "", String(node.fldAuftrNr || ""), belegNr, node.fldDat ? new Date(node.fldDat) : "",
