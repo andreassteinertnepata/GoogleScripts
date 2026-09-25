@@ -8,7 +8,11 @@ function importArchivKomplett() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   let sheet = ss.getSheetByName(CONFIG.SHEET_ARCHIVE);
   let isNewSheet = false; 
-  if (!sheet) { sheet = ss.insertSheet(CONFIG.SHEET_ARCHIVE); isNewSheet = true; }
+  if (!sheet) { 
+    sheet = ss.insertSheet(CONFIG.SHEET_ARCHIVE); 
+    isNewSheet = true; 
+  }
+  
   const currentFilter = sheet.getFilter();
   if (currentFilter) currentFilter.remove();
   
@@ -17,10 +21,13 @@ function importArchivKomplett() {
     sheet.getRange(2, 1, maxRows - 1, sheet.getMaxColumns()).clearContent();
     sheet.getRange(2, 1, maxRows - 1, sheet.getMaxColumns()).clearFormat();
   }
+  
   if (isNewSheet) {
-    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]).setBackground("#2c3e50").setFontColor("#ffffff").setFontWeight("bold");
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS])
+         .setBackground("#2c3e50").setFontColor("#ffffff").setFontWeight("bold");
   }
 
+  // --- Vorgangsarten aus Master-Sheet laden ---
   const vorgangsartenMap = new Map();
   const archivArten = [];
   try {
@@ -37,18 +44,54 @@ function importArchivKomplett() {
         }
       }
     }
-  } catch (e) { return; }
+  } catch (e) { 
+    Logger.log("Fehler beim Laden der Vorgangsarten: " + e);
+    return; 
+  }
 
   if (archivArten.length === 0) return;
+  
   const vor90Tagen = new Date(new Date().getTime() - (90 * 24 * 60 * 60 * 1000));
   const START_DATUM = vor90Tagen.toISOString();
   const formattedVorgangsArten = archivArten.map(art => ({ string: art }));
 
+  // --- GRAPHQL QUERY (Korrigiert auf fldDat und inkl. fldStorniertKz) ---
   const query = `
     query GetArchivRobin($vorgangsArten: [FilterValue!]!, $cursor: String, $startDatum: DateTime!, $vtrNr: String!) {
       tblVorgangArchiv {
-        conRead(first: 100, after: $cursor, fastFilter: { and: [ { ge: [{ field: fldErstDat }, { value: { datetime: $startDatum } }] }, { in: { field: fldArt, values: $vorgangsArten } }, { eq: [{ field: fldVtrNr }, { value: { string: $vtrNr } }] } ] }) {
-          edges { node { fldAdrNr fldArt fldAuftrNr fldBelegNr fldDat fldReNa2 fldReNa3 fldReLandBez fldLiLandBez fldZahlBed rowsPositions { fldArtNr fldMge fldEPrNt fldAbrPosKz rowArtikel { fldKuBez1 fldKuBez3 } } } }
+        conRead(
+          first: 100, 
+          after: $cursor, 
+          fastFilter: { 
+            and: [ 
+              { ge: [{ field: fldDat }, { value: { datetime: $startDatum } }] }, 
+              { in: { field: fldArt, values: $vorgangsArten } }, 
+              { eq: [{ field: fldVtrNr }, { value: { string: $vtrNr } }] } 
+            ] 
+          }
+        ) {
+          edges { 
+            node { 
+              fldAdrNr 
+              fldArt 
+              fldAuftrNr 
+              fldBelegNr 
+              fldDat 
+              fldStorniertKz
+              fldReNa2 
+              fldReNa3 
+              fldReLandBez 
+              fldLiLandBez 
+              fldZahlBed 
+              rowsPositions { 
+                fldArtNr 
+                fldMge 
+                fldEPrNt 
+                fldAbrPosKz 
+                rowArtikel { fldKuBez1 fldKuBez3 } 
+              } 
+            } 
+          }
           pageInfo { hasNextPage endCursor }
         }
       }
@@ -61,35 +104,78 @@ function importArchivKomplett() {
 
   while (hasNextPage) {
     const options = {
-      method: "post", contentType: "application/json", headers: { "X-API-Token": CONFIG.API_TOKEN },
-      payload: JSON.stringify({ query: query, variables: { vorgangsArten: formattedVorgangsArten, cursor: cursor, startDatum: START_DATUM, vtrNr: CONFIG.VERTRETER_NR } }),
+      method: "post", 
+      contentType: "application/json", 
+      headers: { "X-API-Token": CONFIG.API_TOKEN },
+      payload: JSON.stringify({ 
+        query: query, 
+        variables: { 
+          vorgangsArten: formattedVorgangsArten, 
+          cursor: cursor, 
+          startDatum: START_DATUM, 
+          vtrNr: CONFIG.VERTRETER_NR 
+        } 
+      }),
       muteHttpExceptions: true
     };
+    
     try {
       const response = UrlFetchApp.fetch(CONFIG.API_URL, options);
       const json = JSON.parse(response.getContentText());
-      if (json.errors) break;
+      if (json.errors) {
+        Logger.log("GraphQL Error: " + JSON.stringify(json.errors));
+        break;
+      }
+      
       const conRead = json.data?.tblVorgangArchiv?.conRead || {};
+      
       (conRead.edges || []).forEach(edge => {
         const node = edge.node || {};
+        
+        // --- 1. REGEL: Stornierte Belege komplett ignorieren ---
+        if (CONFIG.BUSINESS_LOGIC.isCancelled(node)) {
+          return; // Node überspringen
+        }
+        
         const artCode = String(node.fldArt || "").trim();
         const belegNr = String(node.fldBelegNr || "").trim();
+        
         (node.rowsPositions || []).forEach(pos => {
           if (pos.fldAbrPosKz !== true) return;
+          
           let mge = pos.fldMge || 0;
           let eprNt = pos.fldEPrNt || 0;
-          if (artCode === "123" || belegNr.startsWith("123")) { eprNt = Math.abs(eprNt); mge = -Math.abs(mge); }
+          
+          // --- 2. REGEL: Globale Vorzeichenlogik anwenden ---
+          mge = CONFIG.BUSINESS_LOGIC.applySignLogic(artCode, mge);
+          eprNt = Math.abs(eprNt); // Der Einzelpreis bleibt positiv, die Menge regelt das Vorzeichen der Summe
           
           allRows.push([
-            String(node.fldAdrNr || ""), vorgangsartenMap.get(artCode) || "", String(node.fldAuftrNr || ""), belegNr, node.fldDat ? new Date(node.fldDat) : "",
-            String(node.fldReNa2 || ""), String(node.fldReNa3 || ""), String(node.fldReLandBez || ""), String(node.fldLiLandBez || ""), String(node.fldZahlBed || ""),
-            String(pos.fldArtNr || ""), String(pos.rowArtikel?.fldKuBez1 || ""), String(pos.rowArtikel?.fldKuBez3 || ""), mge, eprNt, mge * eprNt
+            String(node.fldAdrNr || ""), 
+            vorgangsartenMap.get(artCode) || "", 
+            String(node.fldAuftrNr || ""), 
+            belegNr, 
+            node.fldDat ? new Date(node.fldDat) : "",
+            String(node.fldReNa2 || ""), 
+            String(node.fldReNa3 || ""), 
+            String(node.fldReLandBez || ""), 
+            String(node.fldLiLandBez || ""), 
+            String(node.fldZahlBed || ""),
+            String(pos.fldArtNr || ""), 
+            String(pos.rowArtikel?.fldKuBez1 || ""), 
+            String(pos.rowArtikel?.fldKuBez3 || ""), 
+            mge, 
+            eprNt, 
+            mge * eprNt
           ]);
         });
       });
       hasNextPage = conRead.pageInfo?.hasNextPage || false;
       cursor = conRead.pageInfo?.endCursor || null;
-    } catch (e) { break; }
+    } catch (e) { 
+      Logger.log("Fehler beim API Aufruf: " + e);
+      break; 
+    }
   }
 
   if (allRows.length > 0) {
