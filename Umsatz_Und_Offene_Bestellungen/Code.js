@@ -35,9 +35,12 @@ const CONFIG = {
 
   // Archiv-Vorgangsarten für Umsatz (Rechnungen & Korrekturen)
   ARCHIVE_TYPES: [
-    "70", "105", "109", "110", "113", "115", 
+    "70", "90", "105", "109", "110", "113", "115", 
     "122", "123", "129", "154", "155", "156"
   ],
+
+  // Vorgangsarten für Korrekturen/Gutschriften/Erstattungen (Menge wird negativ gewertet)
+  CORRECTION_TYPES: ["90", "123", "156"],
 
   // Aktive Vorgangsarten für offene Bestellungen (Spalte C = "Vorgänge")
   PROCESS_TYPES: {
@@ -45,6 +48,9 @@ const CONFIG = {
     UNPAID: ["106", "112", "118", "120", "164"]
   }
 };
+
+// Schutzbremse gegen Google Apps Script 6-Minuten Timeout (max. 5,5 Min)
+const MAX_EXECUTION_MS = 5.5 * 60 * 1000;
 
 // =========================================================================
 // ONOPEN & SYSTEM-STATUS
@@ -77,28 +83,29 @@ function showUpdateInfo() {
 }
 
 // =========================================================================
-// HAUPTFUNKTION MIT ZEITSTEMPEL-SPEICHERUNG
+// HAUPTFUNKTION MIT ZEITSTEMPEL-SPEICHERUNG & TIMEOUT-SCHUTZ
 // =========================================================================
 function main() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const startTime = Date.now();
   safeToast(ss, "Starte automatischen Datenabruf...", "Datahub Sync");
 
   try {
-    createMonthlyDailyRevenueSheet(ss);
-    createRepRevenueSummarySheet(ss);
-    createMonthlyRevenueTrendSheet(ss);
-    createCustomerRevenueMonthYearSheet(ss);
-    createCustomerRevenueTodaySheet(ss);
-    createCustomerRevenueYesterdaySheet(ss);
-    createCustomerOrderIntakeTodaySheet(ss);
-    createCustomerOrderIntakeYesterdaySheet(ss);
-    createArticleRevenueTodaySheet(ss);
-    createArticleRevenueYesterdaySheet(ss);
-    createArticleOrderIntakeTodaySheet(ss);
-    createArticleOrderIntakeYesterdaySheet(ss);
-    createOpenDocumentsSheet(ss);
-    createOpenOrderSummarySheet(ss);
-    createOpenOrderDetailsSheet(ss);
+    createMonthlyDailyRevenueSheet(ss, startTime);
+    createRepRevenueSummarySheet(ss, startTime);
+    createMonthlyRevenueTrendSheet(ss, startTime);
+    createCustomerRevenueMonthYearSheet(ss, startTime);
+    createCustomerRevenueTodaySheet(ss, startTime);
+    createCustomerRevenueYesterdaySheet(ss, startTime);
+    createCustomerOrderIntakeTodaySheet(ss, startTime);
+    createCustomerOrderIntakeYesterdaySheet(ss, startTime);
+    createArticleRevenueTodaySheet(ss, startTime);
+    createArticleRevenueYesterdaySheet(ss, startTime);
+    createArticleOrderIntakeTodaySheet(ss, startTime);
+    createArticleOrderIntakeYesterdaySheet(ss, startTime);
+    createOpenDocumentsSheet(ss, startTime);
+    createOpenOrderSummarySheet(ss, startTime);
+    createOpenOrderDetailsSheet(ss, startTime);
 
     // Navigations-Blatt mit Klick-Links an 1. Position generieren
     createTableOfContentsSheet(ss);
@@ -114,6 +121,7 @@ function main() {
     safeToast(ss, "Alle Berichte wurden erfolgreich aktualisiert (" + timestamp + ")!", "Fertig");
   } catch (err) {
     Logger.log("Kritischer Fehler in main(): " + err.toString());
+    safeToast(ss, "Fehler beim Abruf: " + err.message, "Abbruch");
   }
 }
 
@@ -152,8 +160,6 @@ function createTableOfContentsSheet(ss) {
 
     const sId = s.getSheetId();
     const cat = categories[sName] || (sName.startsWith("Umsatz_") ? "Monatsübersichten" : "Sonstige Berichte");
-    
-    // Semikolon (;) als Formeltrennzeichen für deutsche Google Sheets
     const linkFormula = `=HYPERLINK("#gid=${sId}"; "➔ Zum Blatt '${sName}' öffnen")`;
     
     const lastRow = s.getLastRow();
@@ -190,10 +196,17 @@ function resolveRepInfo(node) {
   return { repId: repId, repName: repName };
 }
 
+// Helper für lokales Start-Datum
+function getStartOfDayLocal(dateObj) {
+  const tz = Session.getScriptTimeZone();
+  const dateStr = Utilities.formatDate(dateObj, tz, "yyyy-MM-dd");
+  return new Date(dateStr + "T00:00:00");
+}
+
 // =========================================================================
-// 1. TAGESUMSATZ AKTUELLER MONAT {Umsatz_Monat_Jahr}
+// 1. TAGESUMSATZ AKTUELLER MONAT
 // =========================================================================
-function createMonthlyDailyRevenueSheet(ss) {
+function createMonthlyDailyRevenueSheet(ss, startTime) {
   const now = new Date();
   const monthTitle = "Umsatz_" + Utilities.formatDate(now, Session.getScriptTimeZone(), "MMMM_yyyy");
   
@@ -221,6 +234,8 @@ function createMonthlyDailyRevenueSheet(ss) {
               fldBelegNr
               fldArt
               fldDat
+              fldStorniertKz
+              fldSel14
               rowsPositions {
                 fldMge
                 fldEPrNt
@@ -250,23 +265,23 @@ function createMonthlyDailyRevenueSheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { startISO: startISO, types: formattedTypes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgangArchiv.conRead || {};
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (!node.fldDat) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
 
       const docDateStr = Utilities.formatDate(new Date(node.fldDat), Session.getScriptTimeZone(), "yyyy-MM-dd");
       if (!dailyTotals[docDateStr]) return;
 
       const belegNr = String(node.fldBelegNr || "");
       const artCode = String(node.fldArt || "");
-      const isCreditNote = (belegNr.startsWith("123") || artCode === "123");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
@@ -287,7 +302,7 @@ function createMonthlyDailyRevenueSheet(ss) {
         dailyTotals[docDateStr].grossProfit += lineProfit;
 
         if (isCreditNote) {
-          dailyTotals[docDateStr].creditNotes += lineRevenue;
+          dailyTotals[docDateStr].creditNotes += Math.abs(lineRevenue);
         } else {
           dailyTotals[docDateStr].gross += lineRevenue;
         }
@@ -324,12 +339,12 @@ function createMonthlyDailyRevenueSheet(ss) {
 // =========================================================================
 // 2. UMSATZ, ROHERTRAG & MARGE PRO VERTRETER (Umsatz_Vertreter)
 // =========================================================================
-function createRepRevenueSummarySheet(ss) {
+function createRepRevenueSummarySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_REP_SUMMARY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const startOfDay = getStartOfDayLocal(now);
+  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const currentQuarterMonth = Math.floor(now.getMonth() / 3) * 3;
   const startOfQuarter = new Date(now.getFullYear(), currentQuarterMonth, 1);
@@ -388,7 +403,8 @@ function createRepRevenueSummarySheet(ss) {
               fldBelegNr
               fldArt
               fldDat
-              fldErstDat
+              fldStorniertKz
+              fldSel14
               fldVtrNr
               rowAdresse { fldVtrNr }
               rowsPositions {
@@ -413,26 +429,25 @@ function createRepRevenueSummarySheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { cursor: cursor, minStartISO: minStartISO, types: formattedTypes } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgangArchiv?.conRead || {};
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
     const edges = conRead.edges || [];
 
     if (edges.length === 0) break;
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      const docDateStr = node.fldDat || node.fldErstDat;
-      if (!docDateStr) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
 
-      const docTime = new Date(docDateStr).getTime();
+      const docTime = new Date(node.fldDat).getTime();
       const belegNr = String(node.fldBelegNr || "");
       const artCode = String(node.fldArt || "");
       const repInfo = resolveRepInfo(node);
       const repKey = stats[repInfo.repId] ? repInfo.repId : "UNASSIGNED";
-      const isCreditNote = belegNr.startsWith("123") || artCode === "123";
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
@@ -564,7 +579,7 @@ function createRepRevenueSummarySheet(ss) {
 // =========================================================================
 // 3. UMSATZ NACH MONATEN (Umsatz_nach_Monaten)
 // =========================================================================
-function createMonthlyRevenueTrendSheet(ss) {
+function createMonthlyRevenueTrendSheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_MONTHLY_TREND);
 
   const currentYear = new Date().getFullYear();
@@ -588,6 +603,8 @@ function createMonthlyRevenueTrendSheet(ss) {
               fldBelegNr
               fldArt
               fldDat
+              fldStorniertKz
+              fldSel14
               rowsPositions {
                 fldMge
                 fldEPrNt
@@ -619,16 +636,16 @@ function createMonthlyRevenueTrendSheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { startISO: startOfYear2024ISO, types: formattedTypes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgangArchiv.conRead || {};
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (!node.fldDat) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
 
       const docDate = new Date(node.fldDat);
       const yr = docDate.getFullYear();
@@ -638,7 +655,7 @@ function createMonthlyRevenueTrendSheet(ss) {
 
       const belegNr = String(node.fldBelegNr || "");
       const artCode = String(node.fldArt || "");
-      const isCreditNote = (belegNr.startsWith("123") || artCode === "123");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
@@ -698,7 +715,7 @@ function createMonthlyRevenueTrendSheet(ss) {
 // =========================================================================
 // 4. KUNDEN-UMSATZ: MONAT & JAHR (Kunden_Umsatz_Monat_Jahr)
 // =========================================================================
-function createCustomerRevenueMonthYearSheet(ss) {
+function createCustomerRevenueMonthYearSheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_CUST_REV_MJ);
 
   const now = new Date();
@@ -730,7 +747,8 @@ function createCustomerRevenueMonthYearSheet(ss) {
               fldBelegNr
               fldArt
               fldDat
-              fldErstDat
+              fldStorniertKz
+              fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
                 fldMge
@@ -754,28 +772,27 @@ function createCustomerRevenueMonthYearSheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { startISO: startOfYearISO, types: formattedArchiveTypes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgangArchiv?.conRead || {};
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
+
       let custNr = String(node.fldAdrNr || "").trim();
       let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
 
       if (!custNr) custNr = "OHNE_KUNDENNR";
       if (!custName) custName = "Ohne Kundennummer (Gast/Laufkunde)";
 
-      const docDateStr = node.fldDat || node.fldErstDat;
-      if (!docDateStr) return;
-
-      const docTime = new Date(docDateStr).getTime();
+      const docTime = new Date(node.fldDat).getTime();
       const belegNr = String(node.fldBelegNr || "");
       const artCode = String(node.fldArt || "");
-      const isCreditNote = (belegNr.startsWith("123") || artCode === "123");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
       const repInfo = resolveRepInfo(node);
 
       if (!customerMap[custNr]) {
@@ -854,11 +871,11 @@ function createCustomerRevenueMonthYearSheet(ss) {
 // =========================================================================
 // 5. KUNDEN-UMSATZ: HEUTE (Kunden_Umsatz_Heute)
 // =========================================================================
-function createCustomerRevenueTodaySheet(ss) {
+function createCustomerRevenueTodaySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_CUST_REV_TODAY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = getStartOfDayLocal(now);
   const startOfDayISO = startOfDay.toISOString();
 
   const customerMap = {};
@@ -886,7 +903,8 @@ function createCustomerRevenueTodaySheet(ss) {
               fldBelegNr
               fldArt
               fldDat
-              fldErstDat
+              fldStorniertKz
+              fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
                 fldMge
@@ -910,30 +928,29 @@ function createCustomerRevenueTodaySheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { startISO: startOfDayISO, types: formattedArchiveTypes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgangArchiv?.conRead || {};
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
+
+      const docTime = new Date(node.fldDat).getTime();
+      if (docTime < startOfDay.getTime()) return;
+
       let custNr = String(node.fldAdrNr || "").trim();
       let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
 
       if (!custNr) custNr = "OHNE_KUNDENNR";
       if (!custName) custName = "Ohne Kundennummer (Gast/Laufkunde)";
 
-      const docDateStr = node.fldDat || node.fldErstDat;
-      if (!docDateStr) return;
-
-      const docTime = new Date(docDateStr).getTime();
-      if (docTime < startOfDay.getTime()) return;
-
       const belegNr = String(node.fldBelegNr || "");
       const artCode = String(node.fldArt || "");
-      const isCreditNote = (belegNr.startsWith("123") || artCode === "123");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
       const repInfo = resolveRepInfo(node);
 
       if (!customerMap[custNr]) {
@@ -1012,12 +1029,12 @@ function createCustomerRevenueTodaySheet(ss) {
 // =========================================================================
 // 6. KUNDEN-UMSATZ: GESTERN (Kunden_Umsatz_Gestern)
 // =========================================================================
-function createCustomerRevenueYesterdaySheet(ss) {
+function createCustomerRevenueYesterdaySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_CUST_REV_YESTERDAY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const startOfDay = getStartOfDayLocal(now);
+  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
   const startOfYesterdayISO = startOfYesterday.toISOString();
 
   const customerMap = {};
@@ -1045,7 +1062,8 @@ function createCustomerRevenueYesterdaySheet(ss) {
               fldBelegNr
               fldArt
               fldDat
-              fldErstDat
+              fldStorniertKz
+              fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
                 fldMge
@@ -1069,30 +1087,29 @@ function createCustomerRevenueYesterdaySheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { startISO: startOfYesterdayISO, types: formattedArchiveTypes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgangArchiv?.conRead || {};
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
+
+      const docTime = new Date(node.fldDat).getTime();
+      if (docTime < startOfYesterday.getTime() || docTime >= startOfDay.getTime()) return;
+
       let custNr = String(node.fldAdrNr || "").trim();
       let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
 
       if (!custNr) custNr = "OHNE_KUNDENNR";
       if (!custName) custName = "Ohne Kundennummer (Gast/Laufkunde)";
 
-      const docDateStr = node.fldDat || node.fldErstDat;
-      if (!docDateStr) return;
-
-      const docTime = new Date(docDateStr).getTime();
-      if (docTime < startOfYesterday.getTime() || docTime >= startOfDay.getTime()) return;
-
       const belegNr = String(node.fldBelegNr || "");
       const artCode = String(node.fldArt || "");
-      const isCreditNote = (belegNr.startsWith("123") || artCode === "123");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
       const repInfo = resolveRepInfo(node);
 
       if (!customerMap[custNr]) {
@@ -1169,13 +1186,13 @@ function createCustomerRevenueYesterdaySheet(ss) {
 }
 
 // =========================================================================
-// 7. KUNDEN-BESTELLEINGANG: HEUTE (Kunden_Bestelleingang_Heute)
+// 7. KUNDEN-BESTELLEINGANG: HEUTE
 // =========================================================================
-function createCustomerOrderIntakeTodaySheet(ss) {
+function createCustomerOrderIntakeTodaySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_CUST_ORDERS_TODAY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = getStartOfDayLocal(now);
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
   const formattedVorgangCodes = allVorgangCodes.map(code => ({ string: code }));
@@ -1198,6 +1215,7 @@ function createCustomerOrderIntakeTodaySheet(ss) {
               fldReNa2
               fldVtrNr
               fldDat
+              fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
                 fldMge
@@ -1219,15 +1237,17 @@ function createCustomerOrderIntakeTodaySheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { codes: formattedVorgangCodes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgang?.conRead || {};
+    const conRead = json?.data?.tblVorgang?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldSel14 === true) return;
+
       let custNr = String(node.fldAdrNr || "").trim();
       let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
 
@@ -1307,14 +1327,14 @@ function createCustomerOrderIntakeTodaySheet(ss) {
 }
 
 // =========================================================================
-// 8. KUNDEN-BESTELLEINGANG: GESTERN (Kunden_Bestelleingang_Gestern)
+// 8. KUNDEN-BESTELLEINGANG: GESTERN
 // =========================================================================
-function createCustomerOrderIntakeYesterdaySheet(ss) {
+function createCustomerOrderIntakeYesterdaySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_CUST_ORDERS_YESTERDAY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const startOfDay = getStartOfDayLocal(now);
+  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
   const formattedVorgangCodes = allVorgangCodes.map(code => ({ string: code }));
@@ -1337,6 +1357,7 @@ function createCustomerOrderIntakeYesterdaySheet(ss) {
               fldReNa2
               fldVtrNr
               fldDat
+              fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
                 fldMge
@@ -1358,15 +1379,17 @@ function createCustomerOrderIntakeYesterdaySheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { codes: formattedVorgangCodes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgang?.conRead || {};
+    const conRead = json?.data?.tblVorgang?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldSel14 === true) return;
+
       let custNr = String(node.fldAdrNr || "").trim();
       let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
 
@@ -1446,13 +1469,13 @@ function createCustomerOrderIntakeYesterdaySheet(ss) {
 }
 
 // =========================================================================
-// 9. ARTIKEL-UMSATZ: HEUTE (Artikel_Umsatz_Heute)
+// 9. ARTIKEL-UMSATZ: HEUTE
 // =========================================================================
-function createArticleRevenueTodaySheet(ss) {
+function createArticleRevenueTodaySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_ART_REV_TODAY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = getStartOfDayLocal(now);
   const startOfDayISO = startOfDay.toISOString();
 
   const articleMap = {};
@@ -1475,7 +1498,8 @@ function createArticleRevenueTodaySheet(ss) {
               fldBelegNr
               fldArt
               fldDat
-              fldErstDat
+              fldStorniertKz
+              fldSel14
               rowsPositions {
                 fldArtNr
                 fldMge
@@ -1502,24 +1526,23 @@ function createArticleRevenueTodaySheet(ss) {
   let sumTodayRev = 0, sumTodayProfit = 0, sumTodayQty = 0, sumTodayCount = 0;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { startISO: startOfDayISO, types: formattedArchiveTypes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgangArchiv?.conRead || {};
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      const docDateStr = node.fldDat || node.fldErstDat;
-      if (!docDateStr) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
 
-      const docTime = new Date(docDateStr).getTime();
+      const docTime = new Date(node.fldDat).getTime();
       if (docTime < startOfDay.getTime()) return;
 
       const belegNr = String(node.fldBelegNr || "");
       const artCode = String(node.fldArt || "");
-      const isCreditNote = (belegNr.startsWith("123") || artCode === "123");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
@@ -1597,14 +1620,14 @@ function createArticleRevenueTodaySheet(ss) {
 }
 
 // =========================================================================
-// 10. ARTIKEL-UMSATZ: GESTERN (Artikel_Umsatz_Gestern)
+// 10. ARTIKEL-UMSATZ: GESTERN
 // =========================================================================
-function createArticleRevenueYesterdaySheet(ss) {
+function createArticleRevenueYesterdaySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_ART_REV_YESTERDAY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const startOfDay = getStartOfDayLocal(now);
+  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
   const startOfYesterdayISO = startOfYesterday.toISOString();
 
   const articleMap = {};
@@ -1627,7 +1650,8 @@ function createArticleRevenueYesterdaySheet(ss) {
               fldBelegNr
               fldArt
               fldDat
-              fldErstDat
+              fldStorniertKz
+              fldSel14
               rowsPositions {
                 fldArtNr
                 fldMge
@@ -1654,24 +1678,23 @@ function createArticleRevenueYesterdaySheet(ss) {
   let sumYestRev = 0, sumYestProfit = 0, sumYestQty = 0, sumYestCount = 0;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { startISO: startOfYesterdayISO, types: formattedArchiveTypes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgangArchiv?.conRead || {};
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      const docDateStr = node.fldDat || node.fldErstDat;
-      if (!docDateStr) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
 
-      const docTime = new Date(docDateStr).getTime();
+      const docTime = new Date(node.fldDat).getTime();
       if (docTime < startOfYesterday.getTime() || docTime >= startOfDay.getTime()) return;
 
       const belegNr = String(node.fldBelegNr || "");
       const artCode = String(node.fldArt || "");
-      const isCreditNote = (belegNr.startsWith("123") || artCode === "123");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
@@ -1749,13 +1772,13 @@ function createArticleRevenueYesterdaySheet(ss) {
 }
 
 // =========================================================================
-// 11. ARTIKEL-BESTELLEINGANG: HEUTE (Artikel_Bestelleingang_Heute)
+// 11. ARTIKEL-BESTELLEINGANG: HEUTE
 // =========================================================================
-function createArticleOrderIntakeTodaySheet(ss) {
+function createArticleOrderIntakeTodaySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_ART_ORDERS_TODAY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = getStartOfDayLocal(now);
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
   const formattedVorgangCodes = allVorgangCodes.map(code => ({ string: code }));
@@ -1774,6 +1797,7 @@ function createArticleOrderIntakeTodaySheet(ss) {
           edges {
             node {
               fldDat
+              fldSel14
               rowsPositions {
                 fldArtNr
                 fldMge
@@ -1796,15 +1820,17 @@ function createArticleOrderIntakeTodaySheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { codes: formattedVorgangCodes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgang?.conRead || {};
+    const conRead = json?.data?.tblVorgang?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldSel14 === true) return;
+
       const docTime = node.fldDat ? new Date(node.fldDat).getTime() : 0;
       if (docTime < startOfDay.getTime()) return;
 
@@ -1877,14 +1903,14 @@ function createArticleOrderIntakeTodaySheet(ss) {
 }
 
 // =========================================================================
-// 12. ARTIKEL-BESTELLEINGANG: GESTERN (Artikel_Bestelleingang_Gestern)
+// 12. ARTIKEL-BESTELLEINGANG: GESTERN
 // =========================================================================
-function createArticleOrderIntakeYesterdaySheet(ss) {
+function createArticleOrderIntakeYesterdaySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_ART_ORDERS_YESTERDAY);
 
   const now = new Date();
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfYesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const startOfDay = getStartOfDayLocal(now);
+  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
   const formattedVorgangCodes = allVorgangCodes.map(code => ({ string: code }));
@@ -1903,6 +1929,7 @@ function createArticleOrderIntakeYesterdaySheet(ss) {
           edges {
             node {
               fldDat
+              fldSel14
               rowsPositions {
                 fldArtNr
                 fldMge
@@ -1925,15 +1952,17 @@ function createArticleOrderIntakeYesterdaySheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { codes: formattedVorgangCodes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgang?.conRead || {};
+    const conRead = json?.data?.tblVorgang?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldSel14 === true) return;
+
       const docTime = node.fldDat ? new Date(node.fldDat).getTime() : 0;
       if (docTime < startOfYesterday.getTime() || docTime >= startOfDay.getTime()) return;
 
@@ -2006,9 +2035,9 @@ function createArticleOrderIntakeYesterdaySheet(ss) {
 }
 
 // =========================================================================
-// 13. OFFENE BELEGE GRUPPIERT NACH VORGANGSART (Offene_Belege - 6 SPALTEN)
+// 13. OFFENE BELEGE GRUPPIERT NACH VORGANGSART
 // =========================================================================
-function createOpenDocumentsSheet(ss) {
+function createOpenDocumentsSheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_DOCS);
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
@@ -2027,6 +2056,7 @@ function createOpenDocumentsSheet(ss) {
               fldBelegNr
               fldArt
               lblArt
+              fldSel14
               rowsPositions {
                 fldMge
                 fldEPrNt
@@ -2051,15 +2081,17 @@ function createOpenDocumentsSheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { codes: formattedCodes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgang?.conRead || {};
+    const conRead = json?.data?.tblVorgang?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldSel14 === true) return;
+
       const artCode = String(node.fldArt || "").trim();
       if (!artCode) return;
 
@@ -2164,9 +2196,9 @@ function createOpenDocumentsSheet(ss) {
 }
 
 // =========================================================================
-// 14. VORGÄNGE OFFENE SUMMEN (Vorgänge_Offene_Summen)
+// 14. VORGÄNGE OFFENE SUMMEN
 // =========================================================================
-function createOpenOrderSummarySheet(ss) {
+function createOpenOrderSummarySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_SUMMARY);
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
@@ -2184,6 +2216,7 @@ function createOpenOrderSummarySheet(ss) {
             node {
               fldArt
               fldVtrNr
+              fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
                 fldMge
@@ -2212,15 +2245,17 @@ function createOpenOrderSummarySheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { codes: formattedCodes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgang.conRead || {};
+    const conRead = json?.data?.tblVorgang?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
-      const node = edge.node;
+      const node = edge.node || {};
+      if (node.fldSel14 === true) return;
+
       const artCode = String(node.fldArt || "");
       const isPaid = CONFIG.PROCESS_TYPES.PAID.includes(artCode);
       const repInfo = resolveRepInfo(node);
@@ -2269,9 +2304,9 @@ function createOpenOrderSummarySheet(ss) {
 }
 
 // =========================================================================
-// 15. OFFENE BESTELLUNGEN DETAILS (Offene_Bestellungen_Details)
+// 15. OFFENE BESTELLUNGEN DETAILS
 // =========================================================================
-function createOpenOrderDetailsSheet(ss) {
+function createOpenOrderDetailsSheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_DETAILS);
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
@@ -2297,6 +2332,7 @@ function createOpenOrderDetailsSheet(ss) {
               fldAdrNr
               fldReNa1
               fldReNa2
+              fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
                 fldArtNr
@@ -2332,15 +2368,17 @@ function createOpenOrderDetailsSheet(ss) {
   let cursor = null;
 
   while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
     const payload = { query: query, variables: { codes: formattedCodes, cursor: cursor } };
     const json = callGraphQL(payload);
-    if (!json || !json.data) break;
-
-    const conRead = json.data.tblVorgang.conRead || {};
+    const conRead = json?.data?.tblVorgang?.conRead || {};
     const edges = conRead.edges || [];
 
     edges.forEach(edge => {
       const node = edge.node || {};
+      if (node.fldSel14 === true) return;
+
       const artCode = String(node.fldArt || "");
       const isPaid = CONFIG.PROCESS_TYPES.PAID.includes(artCode);
       const paymentStatus = isPaid ? "Bezahlt" : "Unbezahlt";
