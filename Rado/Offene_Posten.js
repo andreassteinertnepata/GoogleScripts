@@ -5,12 +5,11 @@
  */
 function fetchOffenePosten() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const vtrNr = String(CONFIG.VERTRETER_NR || "56").trim();
+  const vtrNr = String(CONFIG.VERTRETER_NR).trim();
   const targetSheetName = CONFIG.SHEET_OUTSTANDING || "Outstanding Invoices";
 
-  // Check language based on representative number
-  const englishReps = ["56", "60"]; // Robin Carter Browne, Rado Kabakov
-  const isEnglish = englishReps.includes(vtrNr);
+  // Check language based on representative array in Config
+  const isEnglish = (CONFIG.ENGLISH_REPS || []).includes(vtrNr);
 
   // Defined Column Headers
   const HEADERS = isEnglish ? [
@@ -33,7 +32,6 @@ function fetchOffenePosten() {
   const customerMap = getRepresentativeCustomers(vtrNr);
 
   if (customerMap.size === 0) {
-   
     return;
   }
 
@@ -109,12 +107,9 @@ function fetchOffenePosten() {
   const startTime = Date.now();
   const MAX_TIME_MS = 5 * 60 * 1000; // 5 minute safety threshold
 
-
-
   while (hasNextPage) {
     if (Date.now() - startTime > MAX_TIME_MS) {
       Logger.log("Zeitlimit erreicht. Speichere geladene Offene Posten...");
-    
       break;
     }
 
@@ -232,8 +227,6 @@ function fetchOffenePosten() {
     }
 
     sheet.autoResizeColumns(1, HEADERS.length);
-
-
   } 
 }
 

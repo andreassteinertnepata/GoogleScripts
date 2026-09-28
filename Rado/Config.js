@@ -6,10 +6,13 @@ const CONFIG = {
   API_URL: "https://datahub.launchpad.nepata.cloud/v2/nepata_vertrieb/graphql",
   API_TOKEN: "e12Bfv!@Ss#asrpPFjucm8a8",
 
-  
-
   // --- Benutzer & Filter ---
-  VERTRETER_NR: "60",
+  // Hier die gewünschte Vertreternummer für das aktuelle Sheet eintragen
+  VERTRETER_NR: "60", // z.B. "56" für Robin, "60" für Rado, "28" für Alexis
+  
+  // Liste der Vertreter-IDs, die englische Header & Übersetzungen nutzen
+  ENGLISH_REPS: ["56", "60"], 
+  
   AUSGESCHLOSSENE_ADRESSEN: [],                   // IDs eintragen, um Kunden zu ignorieren
   ERLAUBTE_LAGER: ["1", "2", "200", "13"],        // Für fetchArticles
   ARTIKEL_KATALOGE: ["0", "1", "7","8", "13", "18"],  // Für fetchArticles
@@ -29,6 +32,7 @@ const CONFIG = {
   SHEET_OPEN_ORDERS: "Open Orders",
   SHEET_OUTSTANDING: "Outstanding Invoices",
   SHEET_ARTICLES: "Articles",
+  SHEET_CUSTOMERS: "Customers",
   SHEET_COLOR_MAPPING: "ColorMapping",
 
   // --- System-Blätter (werden nicht formatiert/übersetzt) ---
@@ -46,7 +50,7 @@ const CONFIG = {
 };
 
 // ==========================================
-// KAUFMÄNNISCHE LOGIK (Neu hinzugefügt)
+// KAUFMÄNNISCHE LOGIK
 // ==========================================
 CONFIG.BUSINESS_LOGIC = {
   // Belegarten, die zwingend negativ gerechnet werden müssen

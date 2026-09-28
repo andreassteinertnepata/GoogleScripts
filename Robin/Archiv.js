@@ -9,16 +9,16 @@ function importArchivKomplett() {
   let sheet = ss.getSheetByName(CONFIG.SHEET_ARCHIVE);
   let isNewSheet = false; 
   if (!sheet) { sheet = ss.insertSheet(CONFIG.SHEET_ARCHIVE); isNewSheet = true; }
-  const currentFilter = sheet.getFilter();
-  if (currentFilter) currentFilter.remove();
   
+  if (sheet.getFilter()) sheet.getFilter().remove();
   const maxRows = sheet.getMaxRows();
   if (maxRows > 1) {
     sheet.getRange(2, 1, maxRows - 1, sheet.getMaxColumns()).clearContent();
     sheet.getRange(2, 1, maxRows - 1, sheet.getMaxColumns()).clearFormat();
   }
   if (isNewSheet) {
-    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]).setBackground("#2c3e50").setFontColor("#ffffff").setFontWeight("bold");
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS])
+         .setBackground("#2c3e50").setFontColor("#ffffff").setFontWeight("bold");
   }
 
   const vorgangsartenMap = new Map();
@@ -47,8 +47,40 @@ function importArchivKomplett() {
   const query = `
     query GetArchivRobin($vorgangsArten: [FilterValue!]!, $cursor: String, $startDatum: DateTime!, $vtrNr: String!) {
       tblVorgangArchiv {
-        conRead(first: 100, after: $cursor, fastFilter: { and: [ { ge: [{ field: fldErstDat }, { value: { datetime: $startDatum } }] }, { in: { field: fldArt, values: $vorgangsArten } }, { eq: [{ field: fldVtrNr }, { value: { string: $vtrNr } }] } ] }) {
-          edges { node { fldAdrNr fldArt fldAuftrNr fldBelegNr fldDat fldReNa2 fldReNa3 fldReLandBez fldLiLandBez fldZahlBed rowsPositions { fldArtNr fldMge fldEPrNt fldAbrPosKz rowArtikel { fldKuBez1 fldKuBez3 } } } }
+        conRead(
+          first: 100, 
+          after: $cursor, 
+          fastFilter: { 
+            and: [ 
+              { ge: [{ field: fldDat }, { value: { datetime: $startDatum } }] }, 
+              { in: { field: fldArt, values: $vorgangsArten } }, 
+              { eq: [{ field: fldVtrNr }, { value: { string: $vtrNr } }] } 
+            ] 
+          }
+        ) {
+          edges { 
+            node { 
+              fldAdrNr 
+              fldArt 
+              fldAuftrNr 
+              fldBelegNr 
+              fldDat 
+              fldStorniertKz
+              fldSel14
+              fldReNa2 
+              fldReNa3 
+              fldReLandBez 
+              fldLiLandBez 
+              fldZahlBed 
+              rowsPositions { 
+                fldArtNr 
+                fldMge 
+                fldEPrNt 
+                fldAbrPosKz 
+                rowArtikel { fldKuBez1 fldKuBez3 } 
+              } 
+            } 
+          }
           pageInfo { hasNextPage endCursor }
         }
       }
@@ -58,27 +90,47 @@ function importArchivKomplett() {
   let allRows = [];
   let hasNextPage = true;
   let cursor = null;
+  const startTime = Date.now();
+  const MAX_TIME_MS = 5.5 * 60 * 1000;
 
   while (hasNextPage) {
+    if (Date.now() - startTime > MAX_TIME_MS) {
+      Logger.log("Zeitlimit für Archiv erreicht.");
+      break;
+    }
+    
     const options = {
       method: "post", contentType: "application/json", headers: { "X-API-Token": CONFIG.API_TOKEN },
       payload: JSON.stringify({ query: query, variables: { vorgangsArten: formattedVorgangsArten, cursor: cursor, startDatum: START_DATUM, vtrNr: CONFIG.VERTRETER_NR } }),
       muteHttpExceptions: true
     };
+    
     try {
       const response = UrlFetchApp.fetch(CONFIG.API_URL, options);
       const json = JSON.parse(response.getContentText());
       if (json.errors) break;
+      
       const conRead = json.data?.tblVorgangArchiv?.conRead || {};
+      
       (conRead.edges || []).forEach(edge => {
         const node = edge.node || {};
+        
+        // REGEL 1 & 2: Stornierte & Testbelege ignorieren
+        if (CONFIG.BUSINESS_LOGIC.isCancelled(node)) return; 
+        if (node.fldSel14 === true) return;
+        
         const artCode = String(node.fldArt || "").trim();
         const belegNr = String(node.fldBelegNr || "").trim();
+        
         (node.rowsPositions || []).forEach(pos => {
           if (pos.fldAbrPosKz !== true) return;
+          
           let mge = pos.fldMge || 0;
           let eprNt = pos.fldEPrNt || 0;
-          if (artCode === "123" || belegNr.startsWith("123")) { eprNt = Math.abs(eprNt); mge = -Math.abs(mge); }
+          
+          // REGEL 3: Vorzeichenlogik via CONFIG (wie gewünscht)
+          mge = CONFIG.BUSINESS_LOGIC.applySignLogic(artCode, mge);
+          eprNt = Math.abs(eprNt); 
           
           allRows.push([
             String(node.fldAdrNr || ""), vorgangsartenMap.get(artCode) || "", String(node.fldAuftrNr || ""), belegNr, node.fldDat ? new Date(node.fldDat) : "",

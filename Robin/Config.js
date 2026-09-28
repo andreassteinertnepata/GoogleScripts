@@ -6,10 +6,13 @@ const CONFIG = {
   API_URL: "https://datahub.launchpad.nepata.cloud/v2/nepata_vertrieb/graphql",
   API_TOKEN: "e12Bfv!@Ss#asrpPFjucm8a8",
 
-  
-
   // --- Benutzer & Filter ---
-  VERTRETER_NR: "56",
+  // Hier die gewünschte Vertreternummer für das aktuelle Sheet eintragen
+  VERTRETER_NR: "56", // z.B. "56" für Robin, "60" für Rado, "28" für Alexis
+  
+  // Liste der Vertreter-IDs, die englische Header & Übersetzungen nutzen
+  ENGLISH_REPS: ["56", "60"], 
+  
   AUSGESCHLOSSENE_ADRESSEN: [],                   // IDs eintragen, um Kunden zu ignorieren
   ERLAUBTE_LAGER: ["1", "2", "200", "13"],        // Für fetchArticles
   ARTIKEL_KATALOGE: ["0", "1", "7","8", "13", "18"],  // Für fetchArticles
@@ -29,6 +32,7 @@ const CONFIG = {
   SHEET_OPEN_ORDERS: "Open Orders",
   SHEET_OUTSTANDING: "Outstanding Invoices",
   SHEET_ARTICLES: "Articles",
+  SHEET_CUSTOMERS: "Customers",
   SHEET_COLOR_MAPPING: "ColorMapping",
 
   // --- System-Blätter (werden nicht formatiert/übersetzt) ---
@@ -43,4 +47,38 @@ const CONFIG = {
   HEADER_FONT_SIZE: 11,
   COL_WIDTH_BUFFER: 20,             // Pixel für Filter-Pfeile
   MAX_COL_WIDTH: 250                // Maximale Spaltenbreite
+};
+
+// ==========================================
+// KAUFMÄNNISCHE LOGIK
+// ==========================================
+CONFIG.BUSINESS_LOGIC = {
+  // Belegarten, die zwingend negativ gerechnet werden müssen
+  CORRECTION_TYPES: ["90", "123", "156"],
+
+  /**
+   * Prüft, ob ein Beleg storniert ist.
+   * @param {Object} node - Der GraphQL Knoten des Belegs
+   * @returns {boolean} true, wenn storniert, sonst false
+   */
+  isCancelled: function(node) {
+    return (node.fldStorniertKz === true || node.fldStorniertKz === 1);
+  },
+
+  /**
+   * Wendet die Vorzeichenlogik auf Basis der Vorgangsart (fldArt) an.
+   * Korrekturen (90, 123, 156) werden negativ, reguläre Rechnungen positiv.
+   * @param {string|number} docType - Die Belegart (fldArt)
+   * @param {number} value - Der zu berechnende Wert (Menge oder Betrag)
+   * @returns {number} Der korrigierte Wert mit richtigem Vorzeichen
+   */
+  applySignLogic: function(docType, value) {
+    const numValue = Number(value) || 0;
+    const typeStr = String(docType).trim();
+    
+    if (this.CORRECTION_TYPES.includes(typeStr)) {
+      return -Math.abs(numValue);
+    }
+    return Math.abs(numValue);
+  }
 };
