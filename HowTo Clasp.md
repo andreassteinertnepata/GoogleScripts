@@ -34,6 +34,20 @@ Sie benötigen die Skript-ID des dazugehörigen Code-Projekts.Öffnen Sie Ihre G
 
 ### Beim Update einer Datei
 
+clasp künftig IMMER im jeweiligen Unterordner ausführen
+
+
+
+:: 1. In den spezifischen Unterordner wechseln
+
+cd "C:\\Users\\andreas.steinert\\Documents\\Python\\py Files\\Google\_Scripts\\**Datahubv2\_Vertreter\_Umsatzziele**"
+
+
+
+:: 2. Skript in DIESEN Unterordner klonen
+
+clasp clone "SKRIPT\_ID\_DIESES\_PROJEKTS"
+
 **In Eingabeauffoderung**
 
 
