@@ -89,7 +89,6 @@ function fetchArticles() {
   const startTime = Date.now();
   const MAX_TIME_MS = 5 * 60 * 1000;
 
-  SpreadsheetApp.getActiveSpreadsheet().toast("Lade Artikel per GraphQL...", "Bitte warten", -1);
 
   // 3. API Fetch & Inline Processing Loop
   while (hasNextPage) {

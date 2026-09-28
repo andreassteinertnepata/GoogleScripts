@@ -9,7 +9,7 @@ const CONFIG = {
   
 
   // --- Benutzer & Filter ---
-  VERTRETER_NR: "56",
+  VERTRETER_NR: "60",
   AUSGESCHLOSSENE_ADRESSEN: [],                   // IDs eintragen, um Kunden zu ignorieren
   ERLAUBTE_LAGER: ["1", "2", "200", "13"],        // Für fetchArticles
   ARTIKEL_KATALOGE: ["0", "1", "7","8", "13", "18"],  // Für fetchArticles
