@@ -1,74 +1,80 @@
 function listFilesInFolder() {
-  // Trage HIER die ID deines Google Drive Ordners ein
-  var folderId = '1tMH5rKOuCWaWE-ryTVd0q83qWd6TwYU5'; 
-  var targetSheetName = 'Update Sheet'; // Name des Zielblattes
-  var dataSheetName = 'DATA'; // Name des Referenzblattes
-  
   var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var infoSheetName = 'Info';
+  var infoSheet = spreadsheet.getSheetByName(infoSheetName);
+  
+  // --- NEU: Wenn das Info-Blatt noch nicht existiert, wird es automatisch erstellt ---
+  if (!infoSheet) {
+    createInfoSheet(spreadsheet, infoSheetName);
+    SpreadsheetApp.getUi().alert(
+      "Das Blatt 'Info' wurde erfolgreich erstellt!\n\n" +
+      "Bitte prüfe dort die angelegten Variablen (Ordner-ID, Blattnamen) und führe das Skript danach noch einmal aus."
+    );
+    return; // Skript bricht hier beim ersten Mal ab, damit du die Variablen ansehen kannst
+  }
+  
+  // --- 1. Variablen direkt aus dem "Info"-Blatt auslesen ---
+  var folderId = infoSheet.getRange("B4").getValue();
+  var targetSheetName = infoSheet.getRange("B5").getValue();
+  var dataSheetName = infoSheet.getRange("B6").getValue();
+  var missingColor = infoSheet.getRange("B7").getValue();
+  
   var sheet = spreadsheet.getSheetByName(targetSheetName);
   var dataSheet = spreadsheet.getSheetByName(dataSheetName);
   
-  // Prüfen, ob das Blatt "Update Sheet" existiert. Wenn nicht, wird es erstellt.
+  // Prüfen, ob das Zielblatt existiert. Wenn nicht, wird es erstellt.
   if (!sheet) {
     sheet = spreadsheet.insertSheet(targetSheetName);
   }
   
-  // WICHTIG: Wenn auf dem Blatt bereits ein Filter aktiv ist, muss dieser erst entfernt werden, 
-  // da 'sheet.clear()' den Filterbereich sonst durcheinanderbringen kann.
+  // Filter entfernen und Zielblatt leeren
   if (sheet.getFilter() !== null) {
     sheet.getFilter().remove();
   }
-  
-  // Löscht den bisherigen Inhalt, Formate und Filter des Blattes
   sheet.clear(); 
   
   // Kopfzeilen für die Daten erstellen
   var headers = ["Dateiname", "Link zur Datei", "Erstellt am", "Zuletzt bearbeitet"];
   sheet.appendRow(headers);
   
-  // --- Formatierung der Kopfzeile (A1:D1) ---
   var headerRange = sheet.getRange(1, 1, 1, headers.length);
   headerRange.setFontWeight("bold")
-             .setBackground("#e0e0e0") // Leicht grauer Hintergrund
-             .setBorder(true, true, true, true, null, null); // Rahmen um die Kopfzeile
+             .setBackground("#e0e0e0") 
+             .setBorder(true, true, true, true, null, null); 
              
-  // Erste Zeile fixieren (damit sie beim Scrollen immer sichtbar bleibt)
   sheet.setFrozenRows(1);
   
-  // --- Zeitstempel der Aktualisierung einfügen ---
+  // Zeitstempel der Aktualisierung einfügen
   var currentTime = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd.MM.yyyy HH:mm:ss");
   var timestampCell = sheet.getRange(1, 6); // Zelle F1
   timestampCell.setValue("Letzte Aktualisierung: " + currentTime);
   timestampCell.setFontWeight("bold"); 
   
-  // --- NEU: Dateinamen aus dem Blatt "DATA" auslesen ---
+  // --- 2. Referenzdaten aus "DATA" (bzw. dem in der Variable definierten Blatt) einlesen ---
   var existingFileNames = new Set();
   if (dataSheet) {
     var lastRow = dataSheet.getLastRow();
     if (lastRow > 1) {
-      // Holt alle Einträge aus Spalte A (Dateiname) im Blatt "DATA"
       var names = dataSheet.getRange(2, 1, lastRow - 1, 1).getValues();
       for (var i = 0; i < names.length; i++) {
         if (names[i][0]) {
-          // Dateinamen speichern (trim() entfernt überflüssige Leerzeichen)
           existingFileNames.add(names[i][0].toString().trim());
         }
       }
     }
   }
   
-  // Ordner abrufen
+  // --- 3. Ordner abrufen ---
   var folder = DriveApp.getFolderById(folderId);
   var files = folder.getFiles();
   
   var data = [];
-  var backgrounds = []; // NEU: Array für die Hintergrundfarben der Zeilen
+  var backgrounds = []; 
   
   // Alle Dateien im Ordner durchgehen
   while (files.hasNext()) {
     var file = files.next();
     
-    // Aktuell nur Google Sheets auflisten
     if (file.getMimeType() === MimeType.GOOGLE_SHEETS) {
       var fileName = file.getName();
       
@@ -79,35 +85,71 @@ function listFilesInFolder() {
         file.getLastUpdated()
       ]);
       
-      // --- NEU: Prüfen, ob der Dateiname in "DATA" fehlt ---
+      // Prüfen, ob der Dateiname in "DATA" fehlt
       if (!existingFileNames.has(fileName.trim())) {
-        // Fehlend: Die 4 Zellen dieser Zeile z.B. hellrot markieren (#f8cecc)
-        backgrounds.push(["#f8cecc", "#f8cecc", "#f8cecc", "#f8cecc"]); 
+        // Fehlend: Die 4 Zellen dieser Zeile mit der Variablen-Farbe markieren
+        backgrounds.push([missingColor, missingColor, missingColor, missingColor]); 
       } else {
-        // Vorhanden: Kein Hintergrund (weiß / null)
+        // Vorhanden: Kein Hintergrund
         backgrounds.push([null, null, null, null]);
       }
     }
   }
   
-  // Daten in das Sheet schreiben, falls Dateien gefunden wurden
+  // --- 4. Daten in das Sheet schreiben ---
   if (data.length > 0) {
-    // Ab Zeile 2 einfügen
     var dataRange = sheet.getRange(2, 1, data.length, headers.length);
     dataRange.setValues(data);
-    
-    // --- NEU: Hintergrundfarben in einem Rutsch anwenden ---
     dataRange.setBackgrounds(backgrounds);
     
-    // --- Datumsspalten (C und D) richtig formatieren ---
     sheet.getRange(2, 3, data.length, 2).setNumberFormat("dd.MM.yyyy HH:mm");
-    
-    // --- Filter über die Datenbereiche (A bis D) setzen ---
     sheet.getRange(1, 1, data.length + 1, headers.length).createFilter();
-    
-    // Die Spaltenbreite automatisch anpassen (Spalte 1 bis 6)
     sheet.autoResizeColumns(1, 6);
   } else {
     sheet.appendRow(["Keine Google Sheets in diesem Ordner gefunden.", "", "", ""]);
   }
+}
+
+// =========================================================================
+// HILFSFUNKTION: Baut das "Info"-Blatt inkl. Variablen und Erklärung auf
+// =========================================================================
+function createInfoSheet(spreadsheet, sheetName) {
+  var sheet = spreadsheet.insertSheet(sheetName, 0); // Fügt das Blatt ganz vorne (Position 0) ein
+  
+  // Titel
+  sheet.getRange("A1").setValue("Skript Info & Variablen").setFontWeight("bold").setFontSize(14);
+  
+  // Variablen-Kopfbereich
+  sheet.getRange("A3:B3").setValues([["Variable", "Aktueller Wert"]]).setFontWeight("bold").setBackground("#e0e0e0");
+  
+  // Die Variablen selbst (werden ab jetzt vom Skript hier ausgelesen)
+  sheet.getRange("A4:B7").setValues([
+    ["Ordner-ID (Google Drive):", "1tMH5rKOuCWaWE-ryTVd0q83qWd6TwYU5"],
+    ["Name des Zielblattes:", "Update Sheet"],
+    ["Name des Referenzblattes:", "DATA"],
+    ["Warnfarbe (Hex-Code):", "#f8cecc"]
+  ]);
+  
+  // Eingabefelder für die Variablen gelb hinterlegen zur Verdeutlichung
+  sheet.getRange("B4:B7").setBackground("#fff2cc").setBorder(true, true, true, true, null, null);
+  
+  // Erklärungs-Titel
+  sheet.getRange("A10").setValue("Was passiert in diesem Skript?").setFontWeight("bold").setFontSize(12);
+  
+  // Detaillierte Schritt-für-Schritt-Erklärung
+  var beschreibung = [
+    ["1. Variablen einlesen:", "Das Skript holt sich die oben definierten Variablen (Ordner-ID, Blattnamen, Farbe) dynamisch aus diesem Blatt."],
+    ["2. Referenzdaten laden:", "Es liest alle vorhandenen Dateinamen aus Spalte A des Blattes aus, das in Zelle B6 definiert ist (z.B. 'DATA')."],
+    ["3. Drive Ordner scannen:", "Es durchsucht den Google Drive Ordner (Zelle B4) nach Google Sheets Dateien."],
+    ["4. Abgleich:", "Jede im Ordner gefundene Datei wird mit der Liste aus dem Referenzblatt ('DATA') abgeglichen."],
+    ["5. Markierung:", "Fehlt eine Datei im Referenzblatt, wird sie in der neuen Übersicht mit der Farbe aus Zelle B7 markiert."],
+    ["6. Ausgabe:", "Die Ergebnisse werden im Zielblatt (Zelle B5) übersichtlich inkl. Zeitstempel ausgegeben."]
+  ];
+  
+  sheet.getRange("A12:B17").setValues(beschreibung);
+  sheet.getRange("A12:A17").setFontWeight("bold"); // Spalte A der Beschreibung fett
+  
+  // Spaltenbreiten anpassen für gute Lesbarkeit
+  sheet.setColumnWidth(1, 250);
+  sheet.setColumnWidth(2, 600);
 }
