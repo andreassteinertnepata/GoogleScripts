@@ -18,6 +18,8 @@ const CONFIG = {
   SHEET_ART_REV_YESTERDAY: "Artikel_Umsatz_Gestern",
   SHEET_ART_ORDERS_TODAY: "Artikel_Bestelleingang_Heute",
   SHEET_ART_ORDERS_YESTERDAY: "Artikel_Bestelleingang_Gestern",
+  SHEET_TODAY_ORDERS_DETAILS: "Bestelleingang_Heute_Details",
+  SHEET_TODAY_REV_DETAILS: "Umsatz_Heute_Details",
   SHEET_OPEN_DOCS: "Offene_Belege",
   SHEET_OPEN_SUMMARY: "Vorgänge_Offene_Summen",
   SHEET_OPEN_DETAILS: "Offene_Bestellungen_Details",
@@ -103,6 +105,8 @@ function main() {
     createArticleRevenueYesterdaySheet(ss, startTime);
     createArticleOrderIntakeTodaySheet(ss, startTime);
     createArticleOrderIntakeYesterdaySheet(ss, startTime);
+    createTodayOrderDetailsSheet(ss, startTime);
+    createTodayRevenueDetailsSheet(ss, startTime);
     createOpenDocumentsSheet(ss, startTime);
     createOpenOrderSummarySheet(ss, startTime);
     createOpenOrderDetailsSheet(ss, startTime);
@@ -145,6 +149,8 @@ function createTableOfContentsSheet(ss) {
     "Artikel_Umsatz_Gestern": "Artikelanalysen",
     "Artikel_Bestelleingang_Heute": "Bestelleingang",
     "Artikel_Bestelleingang_Gestern": "Bestelleingang",
+    "Bestelleingang_Heute_Details": "Bestelleingang",
+    "Umsatz_Heute_Details": "Vertrieb & Team",
     "Offene_Belege": "Offene Vorgänge",
     "Vorgänge_Offene_Summen": "Offene Vorgänge",
     "Offene_Bestellungen_Details": "Offene Vorgänge"
@@ -274,7 +280,10 @@ function createMonthlyDailyRevenueSheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
+      
+      // REGEL: Storno ignorieren + NULL-Falle umgehen
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
+      if (!node.fldDat) return;
 
       const docDateStr = Utilities.formatDate(new Date(node.fldDat), Session.getScriptTimeZone(), "yyyy-MM-dd");
       if (!dailyTotals[docDateStr]) return;
@@ -285,14 +294,19 @@ function createMonthlyDailyRevenueSheet(ss, startTime) {
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
+        // REGEL: Nur echte Abrechnungspositionen
         if (pos.fldAbrPosKz !== true) return;
 
         let mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
+        // REGEL: Kaufmännische Vorzeichenkorrektur
+        eprNt = Math.abs(eprNt);
         if (isCreditNote) {
           mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
         }
 
         const lineRevenue = mge * eprNt;
@@ -454,11 +468,14 @@ function createRepRevenueSummarySheet(ss, startTime) {
         if (pos.fldAbrPosKz !== true) return;
 
         let mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
+        eprNt = Math.abs(eprNt);
         if (isCreditNote) {
           mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
         }
 
         const rev = mge * eprNt;
@@ -662,14 +679,17 @@ function createMonthlyRevenueTrendSheet(ss, startTime) {
         if (pos.fldAbrPosKz !== true) return;
 
         let mge = pos.fldMge || 0;
-        const price = pos.fldEPrNt || 0;
+        let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
+        eprNt = Math.abs(eprNt);
         if (isCreditNote) {
           mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
         }
 
-        const rev = mge * price;
+        const rev = mge * eprNt;
         const profit = rev - (mge * eekRoh);
 
         monthlyData[yr][m].rev += rev;
@@ -814,11 +834,14 @@ function createCustomerRevenueMonthYearSheet(ss, startTime) {
         if (pos.fldAbrPosKz !== true) return;
 
         let mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
+        eprNt = Math.abs(eprNt);
         if (isCreditNote) {
           mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
         }
 
         const rev = mge * eprNt;
@@ -971,11 +994,14 @@ function createCustomerRevenueTodaySheet(ss, startTime) {
         if (pos.fldAbrPosKz !== true) return;
 
         let mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
+        eprNt = Math.abs(eprNt);
         if (isCreditNote) {
           mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
         }
 
         const rev = mge * eprNt;
@@ -1130,11 +1156,14 @@ function createCustomerRevenueYesterdaySheet(ss, startTime) {
         if (pos.fldAbrPosKz !== true) return;
 
         let mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
+        eprNt = Math.abs(eprNt);
         if (isCreditNote) {
           mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
         }
 
         const rev = mge * eprNt;
@@ -1275,7 +1304,7 @@ function createCustomerOrderIntakeTodaySheet(ss, startTime) {
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
         const mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        const eprNt = Math.abs(pos.fldEPrNt || 0);
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -1417,7 +1446,7 @@ function createCustomerOrderIntakeYesterdaySheet(ss, startTime) {
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
         const mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        const eprNt = Math.abs(pos.fldEPrNt || 0);
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -1551,11 +1580,14 @@ function createArticleRevenueTodaySheet(ss, startTime) {
         if (!artNr) artNr = "SONSTIGE";
 
         let mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
+        eprNt = Math.abs(eprNt);
         if (isCreditNote) {
           mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
         }
 
         const rev = mge * eprNt;
@@ -1703,11 +1735,14 @@ function createArticleRevenueYesterdaySheet(ss, startTime) {
         if (!artNr) artNr = "SONSTIGE";
 
         let mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
+        eprNt = Math.abs(eprNt);
         if (isCreditNote) {
           mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
         }
 
         const rev = mge * eprNt;
@@ -1727,7 +1762,7 @@ function createArticleRevenueYesterdaySheet(ss, startTime) {
         aObj.qtyYesterday += mge;
         aObj.countYesterday++;
 
-        sumYestRev += rev;
+        sumYestRev += val;
         sumYestProfit += profit;
         sumYestQty += mge;
         sumYestCount++;
@@ -1840,7 +1875,7 @@ function createArticleOrderIntakeTodaySheet(ss, startTime) {
         if (!artNr) artNr = "SONSTIGE";
 
         const mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        const eprNt = Math.abs(pos.fldEPrNt || 0);
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -1972,7 +2007,7 @@ function createArticleOrderIntakeYesterdaySheet(ss, startTime) {
         if (!artNr) artNr = "SONSTIGE";
 
         const mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        const eprNt = Math.abs(pos.fldEPrNt || 0);
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -2035,7 +2070,313 @@ function createArticleOrderIntakeYesterdaySheet(ss, startTime) {
 }
 
 // =========================================================================
-// 13. OFFENE BELEGE GRUPPIERT NACH VORGANGSART
+// 13. BESTELLEINGANG HEUTE DETAILS (POSITIONSEBENE)
+// =========================================================================
+function createTodayOrderDetailsSheet(ss, startTime) {
+  let sheet = prepareSheet(ss, CONFIG.SHEET_TODAY_ORDERS_DETAILS);
+
+  const now = new Date();
+  const startOfDay = getStartOfDayLocal(now);
+
+  const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
+  const formattedCodes = allVorgangCodes.map(code => ({ string: code }));
+
+  const query = `
+    query GetTodayOrderDetails($codes: [FilterValue!]!, $cursor: String) {
+      tblVorgang {
+        conRead(
+          first: 100,
+          after: $cursor,
+          fastFilter: { in: { field: fldArt, values: $codes } }
+        ) {
+          edges {
+            node {
+              fldBelegNr
+              fldAuftrNr
+              fldArt
+              lblArt
+              fldDat
+              fldLiefDat
+              fldVtrNr
+              fldAdrNr
+              fldReNa1
+              fldReNa2
+              fldSel14
+              rowAdresse { fldVtrNr }
+              rowsPositions {
+                fldArtNr
+                fldMge
+                fldEPrNt
+                fldEEkRoh
+                rowArtikel {
+                  fldKuBez1
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  `;
+
+  const headers = [
+    "Belegdatum", "Lieferdatum", "Beleg-Nr.", "Auftrags-Nr.", "Vorgangs-Code", 
+    "Vorgangsart", "Zahlungsstatus", "Vertreter-ID", "Vertreter Name", "Kunden-Nr.", 
+    "Kundenname", "Artikel-Nr.", "Artikelbezeichnung", "Menge", 
+    "Einzelpreis Netto (€)", "Gesamtpreis Netto (€)", "Rohertrag (€)", "Marge (%)"
+  ];
+  
+  const rows = [headers];
+  let hasNextPage = true;
+  let cursor = null;
+
+  while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
+    const payload = { query: query, variables: { codes: formattedCodes, cursor: cursor } };
+    const json = callGraphQL(payload);
+    const conRead = json?.data?.tblVorgang?.conRead || {};
+    const edges = conRead.edges || [];
+
+    edges.forEach(edge => {
+      const node = edge.node || {};
+      if (node.fldSel14 === true) return;
+
+      const docTime = node.fldDat ? new Date(node.fldDat).getTime() : 0;
+      if (docTime < startOfDay.getTime()) return;
+
+      const artCode = String(node.fldArt || "");
+      const isPaid = CONFIG.PROCESS_TYPES.PAID.includes(artCode);
+      const paymentStatus = isPaid ? "Bezahlt" : "Unbezahlt";
+      
+      const repInfo = resolveRepInfo(node);
+      let custNr = String(node.fldAdrNr || "").trim();
+      let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
+
+      if (!custNr) custNr = "OHNE_KUNDENNR";
+      if (!custName) custName = "Ohne Kundennummer (Gast/Laufkunde)";
+
+      const positions = node.rowsPositions || [];
+      positions.forEach(pos => {
+        let artNr = String(pos.fldArtNr || "").trim();
+        if (!artNr) artNr = "SONSTIGE";
+
+        const qty = pos.fldMge || 0;
+        const unitPrice = Math.abs(pos.fldEPrNt || 0);
+        const eekRoh = pos.fldEEkRoh || 0;
+        const totalPrice = qty * unitPrice;
+        const profit = totalPrice - (qty * eekRoh);
+        const margin = totalPrice !== 0 ? profit / totalPrice : 0;
+
+        rows.push([
+          node.fldDat ? new Date(node.fldDat) : "",
+          node.fldLiefDat ? new Date(node.fldLiefDat) : "",
+          node.fldBelegNr || "",
+          node.fldAuftrNr || "",
+          artCode,
+          node.lblArt || artCode,
+          paymentStatus,
+          repInfo.repId,
+          repInfo.repName,
+          custNr,
+          custName,
+          artNr,
+          pos.rowArtikel?.fldKuBez1 || (artNr === "SONSTIGE" ? "Sonderposition / Sonstige" : artNr),
+          qty,
+          unitPrice,
+          totalPrice,
+          profit,
+          margin
+        ]);
+      });
+    });
+
+    hasNextPage = conRead.pageInfo?.hasNextPage || false;
+    cursor = conRead.pageInfo?.endCursor || null;
+  }
+
+  writeToSheet(sheet, rows);
+  
+  sheet.getRange("C:F").setNumberFormat("@");
+  sheet.getRange("H:H").setNumberFormat("@");
+  sheet.getRange("J:J").setNumberFormat("@");
+  sheet.getRange("L:L").setNumberFormat("@");
+
+  if (rows.length > 1) {
+    sheet.getRange(2, 1, rows.length - 1, 2).setNumberFormat("yyyy-mm-dd");
+    sheet.getRange(2, 14, rows.length - 1, 1).setNumberFormat("#,##0");
+    sheet.getRange(2, 15, rows.length - 1, 3).setNumberFormat("#,##0.00 €");
+    sheet.getRange(2, 18, rows.length - 1, 1).setNumberFormat("0.00%");
+  }
+}
+
+// =========================================================================
+// 14. UMSATZ HEUTE DETAILS (POSITIONSEBENE)
+// =========================================================================
+function createTodayRevenueDetailsSheet(ss, startTime) {
+  let sheet = prepareSheet(ss, CONFIG.SHEET_TODAY_REV_DETAILS);
+
+  const now = new Date();
+  const startOfDay = getStartOfDayLocal(now);
+  const startOfDayISO = startOfDay.toISOString();
+
+  const formattedArchiveTypes = CONFIG.ARCHIVE_TYPES.map(type => ({ string: type }));
+
+  const query = `
+    query GetTodayRevenueDetails($startISO: DateTime!, $types: [FilterValue!]!, $cursor: String) {
+      tblVorgangArchiv {
+        conRead(
+          first: 100,
+          after: $cursor,
+          fastFilter: {
+            and: [
+              { ge: [{ field: fldDat }, { value: { datetime: $startISO } }] },
+              { in: { field: fldArt, values: $types } }
+            ]
+          }
+        ) {
+          edges {
+            node {
+              fldBelegNr
+              fldAuftrNr
+              fldArt
+              lblArt
+              fldDat
+              fldLiefDat
+              fldStorniertKz
+              fldSel14
+              fldVtrNr
+              fldAdrNr
+              fldReNa1
+              fldReNa2
+              rowAdresse { fldVtrNr }
+              rowsPositions {
+                fldArtNr
+                fldMge
+                fldEPrNt
+                fldEEkRoh
+                fldAbrPosKz
+                rowArtikel {
+                  fldKuBez1
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  `;
+
+  const headers = [
+    "Belegdatum", "Lieferdatum", "Beleg-Nr.", "Auftrags-Nr.", "Vorgangs-Code", 
+    "Vorgangsart", "Vertreter-ID", "Vertreter Name", "Kunden-Nr.", 
+    "Kundenname", "Artikel-Nr.", "Artikelbezeichnung", "Menge", 
+    "Einzelpreis Netto (€)", "Gesamtpreis Netto (€)", "Rohertrag (€)", "Marge (%)"
+  ];
+  
+  const rows = [headers];
+  let hasNextPage = true;
+  let cursor = null;
+
+  while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
+    const payload = { query: query, variables: { startISO: startOfDayISO, types: formattedArchiveTypes, cursor: cursor } };
+    const json = callGraphQL(payload);
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
+    const edges = conRead.edges || [];
+
+    edges.forEach(edge => {
+      const node = edge.node || {};
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
+
+      const docTime = new Date(node.fldDat).getTime();
+      if (docTime < startOfDay.getTime()) return;
+
+      const artCode = String(node.fldArt || "");
+      const belegNr = String(node.fldBelegNr || "");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
+
+      const repInfo = resolveRepInfo(node);
+      let custNr = String(node.fldAdrNr || "").trim();
+      let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
+
+      if (!custNr) custNr = "OHNE_KUNDENNR";
+      if (!custName) custName = "Ohne Kundennummer (Gast/Laufkunde)";
+
+      const positions = node.rowsPositions || [];
+      positions.forEach(pos => {
+        if (pos.fldAbrPosKz !== true) return;
+
+        let artNr = String(pos.fldArtNr || "").trim();
+        if (!artNr) artNr = "SONSTIGE";
+
+        let mge = pos.fldMge || 0;
+        let eprNt = pos.fldEPrNt || 0;
+        const eekRoh = pos.fldEEkRoh || 0;
+
+        eprNt = Math.abs(eprNt);
+        if (isCreditNote) {
+          mge = -Math.abs(mge);
+        } else {
+          mge = Math.abs(mge);
+        }
+
+        const lineRevenue = mge * eprNt;
+        const lineProfit = lineRevenue - (mge * eekRoh);
+        const margin = lineRevenue !== 0 ? lineProfit / lineRevenue : 0;
+
+        rows.push([
+          node.fldDat ? new Date(node.fldDat) : "",
+          node.fldLiefDat ? new Date(node.fldLiefDat) : "",
+          belegNr,
+          node.fldAuftrNr || "",
+          artCode,
+          node.lblArt || artCode,
+          repInfo.repId,
+          repInfo.repName,
+          custNr,
+          custName,
+          artNr,
+          pos.rowArtikel?.fldKuBez1 || (artNr === "SONSTIGE" ? "Sonderposition / Sonstige" : artNr),
+          mge,
+          eprNt,
+          lineRevenue,
+          lineProfit,
+          margin
+        ]);
+      });
+    });
+
+    hasNextPage = conRead.pageInfo?.hasNextPage || false;
+    cursor = conRead.pageInfo?.endCursor || null;
+  }
+
+  writeToSheet(sheet, rows);
+  
+  sheet.getRange("C:F").setNumberFormat("@");
+  sheet.getRange("G:G").setNumberFormat("@");
+  sheet.getRange("I:I").setNumberFormat("@");
+  sheet.getRange("K:K").setNumberFormat("@");
+
+  if (rows.length > 1) {
+    sheet.getRange(2, 1, rows.length - 1, 2).setNumberFormat("yyyy-mm-dd");
+    sheet.getRange(2, 13, rows.length - 1, 1).setNumberFormat("#,##0");
+    sheet.getRange(2, 14, rows.length - 1, 3).setNumberFormat("#,##0.00 €");
+    sheet.getRange(2, 17, rows.length - 1, 1).setNumberFormat("0.00%");
+  }
+}
+
+// =========================================================================
+// 15. OFFENE BELEGE GRUPPIERT NACH VORGANGSART
 // =========================================================================
 function createOpenDocumentsSheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_DOCS);
@@ -2114,7 +2455,7 @@ function createOpenDocumentsSheet(ss, startTime) {
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
         const mge = pos.fldMge || 0;
-        const eprNt = pos.fldEPrNt || 0;
+        const eprNt = Math.abs(pos.fldEPrNt || 0);
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -2196,7 +2537,7 @@ function createOpenDocumentsSheet(ss, startTime) {
 }
 
 // =========================================================================
-// 14. VORGÄNGE OFFENE SUMMEN
+// 16. VORGÄNGE OFFENE SUMMEN
 // =========================================================================
 function createOpenOrderSummarySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_SUMMARY);
@@ -2263,7 +2604,7 @@ function createOpenOrderSummarySheet(ss, startTime) {
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
-        const lineTotal = (pos.fldMge || 0) * (pos.fldEPrNt || 0);
+        const lineTotal = (pos.fldMge || 0) * Math.abs(pos.fldEPrNt || 0); 
         if (isPaid) {
           repSummary[repKey].paidAmount += lineTotal;
           totalPaid += lineTotal;
@@ -2304,7 +2645,7 @@ function createOpenOrderSummarySheet(ss, startTime) {
 }
 
 // =========================================================================
-// 15. OFFENE BESTELLUNGEN DETAILS
+// 17. OFFENE BESTELLUNGEN DETAILS
 // =========================================================================
 function createOpenOrderDetailsSheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_DETAILS);
@@ -2397,7 +2738,7 @@ function createOpenOrderDetailsSheet(ss, startTime) {
 
         const qty = pos.fldMge || 0;
         const oQty = pos.fldOMge || 0;
-        const unitPrice = pos.fldEPrNt || 0;
+        const unitPrice = Math.abs(pos.fldEPrNt || 0);
         const totalPrice = qty * unitPrice;
 
         rows.push([
