@@ -1,13 +1,18 @@
 /**
  * Offene_Posten_Buchhaltung.gs
  * Lädt alle offenen Posten (ohne Vertreter-Filter) für die Buchhaltung.
- * Erstellt eine Kunden- und Vertreterübersicht mit Gesamtsaldo, überfälliger Summe,
+ * Erstellt eine Beleg-, Kunden- und Vertreterübersicht mit Gesamtsaldo, überfälliger Summe,
  * noch nicht fälliger Summe, Guthaben (positiv ausgewiesen) sowie "Überfällig minus Guthaben".
- * NEU: Inklusive automatischer Summenzeile am Ende der Kunden- und Vertreter-Blätter.
+ * 
+ * EIGENSCHAFTEN:
+ * - Dynamische Summenzeilen per SUBTOTAL(109; ...) mit Semikolon (;) für deutsche Ländereinstellung
+ * - Vollständige Erfassung unzugeordneter Belege ("Ohne Vertreter")
+ * - Zeilenfarben (Rot = Mahnstufe > 0, Orange = Guthaben < 0, Grün = Noch nicht fällig)
+ * - Menü "Update" in Google Sheets
  */
 
 // =========================================================================
-// 1. ZENTRALE KONFIGURATION & VOLLSTÄNDIGES VERTRETER-MAPPING
+// 1. ZENTRALE KONFIGURATION & VERTRETER-MAPPING
 // =========================================================================
 const CONFIG = {
   API_URL: "https://datahub.launchpad.nepata.cloud/v2/nepata_vertrieb/graphql",
@@ -30,11 +35,22 @@ const REPS = {
 };
 
 /**
- * Hilfsfunktion zur Ermittlung des Vertreter-Namens
+ * Hilfsfunktion zur Ermittlung des Vertreter-Namens mit sauberem Fallback
  */
 function getVertreterName(vtrNr) {
-  const nr = String(vtrNr || "").trim();
-  return REPS[nr] ? REPS[nr].name : (nr || "Unbekannt");
+  if (vtrNr === null || vtrNr === undefined) return "Ohne Vertreter";
+  
+  const nr = String(vtrNr).trim();
+  
+  if (!nr || nr === "0" || nr === "00" || nr === "0.0") {
+    return "Ohne Vertreter";
+  }
+  
+  if (REPS[nr]) {
+    return REPS[nr].name;
+  }
+  
+  return "Vertreter " + nr;
 }
 
 // =========================================================================
@@ -44,7 +60,7 @@ function fetchOffenePostenBuchhaltung() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
   // Namen der 3 Tabellenblätter
-  const SHEET_OP = "Offene Posten (Buchhaltung)";
+  const SHEET_OP = "Offene Posten (Belege)";
   const SHEET_KUNDE = "OP-Summen pro Kunde";
   const SHEET_VTR = "OP-Summen pro Vertreter";
 
@@ -72,9 +88,9 @@ function fetchOffenePostenBuchhaltung() {
   const ausgeschlosseneAdressen = CONFIG.AUSGESCHLOSSENE_ADRESSEN || [];
 
   if (typeof showStatusBox === "function") {
-    showStatusBox("Buchhaltung", "Lade alle offenen Posten und aggregiere Daten...");
+    showStatusBox("Update", "Lade alle offenen Posten und aggregiere Daten...");
   } else {
-    ss.toast("Lade alle offenen Posten...", "Buchhaltung", 5);
+    ss.toast("Lade alle offenen Posten...", "Update", 5);
   }
 
   // --- GRAPHQL QUERY ---
@@ -217,8 +233,9 @@ function fetchOffenePostenBuchhaltung() {
 
         const opSaldo = parseFloat(node.fldOPSaldoBet) || 0;
         const opText = String(node.fldText || "").trim();
+        const mahnstufe = parseInt(node.fldMahnSt, 10) || 0;
 
-        // Einzelzeile für Sheet 1
+        // Einzelzeile für Sheet 1 (Belege)
         allRowsOP.push([
           vtrNr, vtrName, kredLimit, adrNr, kundengruppe, status,
           name2, name3, land,
@@ -227,7 +244,7 @@ function fetchOffenePostenBuchhaltung() {
           nettoTg,
           parseFloat(node.fldBezBet) || 0,
           opSaldo,
-          node.fldMahnSt || 0,
+          mahnstufe,
           node.fldMahnDat ? new Date(node.fldMahnDat) : "",
           faelligkeitStr,
           faelligSeitTage
@@ -263,30 +280,29 @@ function fetchOffenePostenBuchhaltung() {
           }
         }
 
-        // --- 4. VERTRETER-AGGREGATION ---
-        if (vtrNr) {
-          if (!mapVtr.has(vtrNr)) {
-            mapVtr.set(vtrNr, {
-              vtrNr: vtrNr,
-              vtrName: vtrName,
-              gesamtSaldo: 0,
-              ueberfaellig: 0,
-              nichtFaellig: 0,
-              guthaben: 0
-            });
-          }
+        // --- 4. VERTRETER-AGGREGATION (Inklusive "Ohne Vertreter") ---
+        const vtrKey = (!vtrNr || vtrNr === "0" || vtrNr === "00" || vtrNr === "0.0") ? "0" : vtrNr;
+        if (!mapVtr.has(vtrKey)) {
+          mapVtr.set(vtrKey, {
+            vtrNr: vtrKey,
+            vtrName: getVertreterName(vtrKey),
+            gesamtSaldo: 0,
+            ueberfaellig: 0,
+            nichtFaellig: 0,
+            guthaben: 0
+          });
+        }
 
-          const v = mapVtr.get(vtrNr);
-          v.gesamtSaldo += opSaldo;
+        const v = mapVtr.get(vtrKey);
+        v.gesamtSaldo += opSaldo;
 
-          if (opSaldo < 0) {
-            v.guthaben += Math.abs(opSaldo);
+        if (opSaldo < 0) {
+          v.guthaben += Math.abs(opSaldo);
+        } else {
+          if (isOverdue) {
+            v.ueberfaellig += opSaldo;
           } else {
-            if (isOverdue) {
-              v.ueberfaellig += opSaldo;
-            } else {
-              v.nichtFaellig += opSaldo;
-            }
+            v.nichtFaellig += opSaldo;
           }
         }
       });
@@ -301,112 +317,102 @@ function fetchOffenePostenBuchhaltung() {
 
   // --- 5. DATEN IN DIE SHEETS SCHREIBEN ---
   
-  // 5.1 Hauptblatt: Alle offenen Posten (ohne Gesamtsummenzeile)
+  // 5.1 Hauptblatt: Offene Posten (Belege) mit Farbregeln
   writeBuchhaltungSheet(ss, SHEET_OP, headersOP, allRowsOP, (sheet) => {
      sheet.getRange("A:B").setNumberFormat("@"); 
      sheet.getRange("D:D").setNumberFormat("@"); 
      sheet.getRange("J:K").setNumberFormat("@"); 
      if (allRowsOP.length > 0) {
        sheet.getRange(2, 13, allRowsOP.length, 1).setNumberFormat("yyyy-mm-dd"); 
+       sheet.getRange(2, 14, allRowsOP.length, 1).setNumberFormat("0");          
        sheet.getRange(2, 15, allRowsOP.length, 2).setNumberFormat('#,##0.00 "€"'); 
-       sheet.getRange(2, 18, allRowsOP.length, 1).setNumberFormat("yyyy-mm-dd"); 
-       sheet.getRange(2, 19, allRowsOP.length, 1).setNumberFormat("yyyy-mm-dd"); 
+       sheet.getRange(2, 17, allRowsOP.length, 1).setNumberFormat("0");          
+       sheet.getRange(2, 18, allRowsOP.length, 2).setNumberFormat("yyyy-mm-dd"); 
        sheet.getRange(2, 20, allRowsOP.length, 1).setNumberFormat("0");          
+
+       // --- ZEILENFARBEN ANWENDEN ---
+       const backgrounds = [];
+       for (let i = 0; i < allRowsOP.length; i++) {
+         const row = allRowsOP[i];
+         const opSaldo = row[15];         // Spalte P (OP-Saldo Betrag)
+         const mahnstufe = row[16];       // Spalte Q (Mahnstufe)
+         const faelligTage = row[19];     // Spalte T (Überfällig seit Tagen)
+
+         let rowColor = (i % 2 === 0) ? "#ffffff" : "#f9fbfd"; 
+
+         if (mahnstufe > 0) {
+           rowColor = "#fce8e6"; // ROT: Mahnstufe > 0
+         } else if (opSaldo < 0) {
+           rowColor = "#fce5cd"; // ORANGE: OP-Saldo Betrag negativ
+         } else if (faelligTage === "" || faelligTage === null || faelligTage === undefined) {
+           rowColor = "#d9ead3"; // GRÜN: Nicht überfällig
+         }
+
+         backgrounds.push(new Array(headersOP.length).fill(rowColor));
+       }
+
+       sheet.getRange(2, 1, allRowsOP.length, headersOP.length).setBackgrounds(backgrounds);
      }
-  }, false);
+  }, null);
 
-  // 5.2 Kundenblatt: Einzelzeilen + Gesamtsumme als letzte Zeile
-  let sumKundeGesamt = 0;
-  let sumKundeUeber = 0;
-  let sumKundeNicht = 0;
-  let sumKundeGut = 0;
-
+  // 5.2 Kundenblatt: OP-Summen pro Kunde mit DYNAMISCHER SUMMENZEILE (mit Semikolon)
   const rowsKunde = Array.from(mapKunde.values())
-    .map(k => {
-      const ueberfaelligNetto = k.ueberfaellig - k.guthaben;
-      sumKundeGesamt += k.gesamtSaldo;
-      sumKundeUeber += k.ueberfaellig;
-      sumKundeNicht += k.nichtFaellig;
-      sumKundeGut += k.guthaben;
-
-      return [
-        k.adrNr,
-        k.name,
-        k.gruppe,
-        k.vtr,
-        k.vtrName,
-        k.gesamtSaldo,
-        k.ueberfaellig,
-        k.nichtFaellig,
-        k.guthaben,
-        ueberfaelligNetto
-      ];
-    })
+    .map(k => [
+      k.adrNr,
+      k.name,
+      k.gruppe,
+      k.vtr,
+      k.vtrName,
+      k.gesamtSaldo,
+      k.ueberfaellig,
+      k.nichtFaellig,
+      k.guthaben,
+      k.ueberfaellig - k.guthaben
+    ])
     .sort((a, b) => b[5] - a[5]);
 
-  // Gesamtsummenzeile für Kunden anhängen
-  const sumKundeNetto = sumKundeUeber - sumKundeGut;
-  rowsKunde.push([
-    "Gesamtsumme", "", "", "", "",
-    sumKundeGesamt, sumKundeUeber, sumKundeNicht, sumKundeGut, sumKundeNetto
-  ]);
-
-  writeBuchhaltungSheet(ss, SHEET_KUNDE, headersKunde, rowsKunde, (sheet) => {
+  writeBuchhaltungSheet(ss, SHEET_KUNDE, headersKunde, rowsKunde, (sheet, dataCount) => {
     sheet.getRange("A:A").setNumberFormat("@");
     sheet.getRange("D:E").setNumberFormat("@"); 
-    if (rowsKunde.length > 0) {
-      sheet.getRange(2, 6, rowsKunde.length, 5).setNumberFormat('#,##0.00 "€"');
+    if (dataCount > 0) {
+      sheet.getRange(2, 6, dataCount + 1, 5).setNumberFormat('#,##0.00 "€"');
     }
-  }, true);
+  }, {
+    startTextCol: 1, textValues: [["Gesamtsumme", "", "", "", ""]],
+    formulaStartCol: 6, formulaCols: ["F", "G", "H", "I", "J"]
+  });
 
-  // 5.3 Vertreterblatt: Einzelzeilen + Gesamtsumme als letzte Zeile
-  let sumVtrGesamt = 0;
-  let sumVtrUeber = 0;
-  let sumVtrNicht = 0;
-  let sumVtrGut = 0;
-
+  // 5.3 Vertreterblatt: OP-Summen pro Vertreter mit DYNAMISCHER SUMMENZEILE (mit Semikolon)
   const rowsVtr = Array.from(mapVtr.values())
-    .map(v => {
-      const ueberfaelligNetto = v.ueberfaellig - v.guthaben;
-      sumVtrGesamt += v.gesamtSaldo;
-      sumVtrUeber += v.ueberfaellig;
-      sumVtrNicht += v.nichtFaellig;
-      sumVtrGut += v.guthaben;
-
-      return [
-        v.vtrNr,
-        v.vtrName,
-        v.gesamtSaldo,
-        v.ueberfaellig,
-        v.nichtFaellig,
-        v.guthaben,
-        ueberfaelligNetto
-      ];
-    })
+    .map(v => [
+      v.vtrNr,
+      v.vtrName,
+      v.gesamtSaldo,
+      v.ueberfaellig,
+      v.nichtFaellig,
+      v.guthaben,
+      v.ueberfaellig - v.guthaben
+    ])
     .sort((a, b) => b[2] - a[2]);
 
-  // Gesamtsummenzeile für Vertreter anhängen
-  const sumVtrNetto = sumVtrUeber - sumVtrGut;
-  rowsVtr.push([
-    "Gesamtsumme", "",
-    sumVtrGesamt, sumVtrUeber, sumVtrNicht, sumVtrGut, sumVtrNetto
-  ]);
-
-  writeBuchhaltungSheet(ss, SHEET_VTR, headersVtr, rowsVtr, (sheet) => {
+  writeBuchhaltungSheet(ss, SHEET_VTR, headersVtr, rowsVtr, (sheet, dataCount) => {
     sheet.getRange("A:B").setNumberFormat("@");
-    if (rowsVtr.length > 0) {
-      sheet.getRange(2, 3, rowsVtr.length, 5).setNumberFormat('#,##0.00 "€"');
+    if (dataCount > 0) {
+      sheet.getRange(2, 3, dataCount + 1, 5).setNumberFormat('#,##0.00 "€"');
     }
-  }, true);
+  }, {
+    startTextCol: 1, textValues: [["Gesamtsumme", ""]],
+    formulaStartCol: 3, formulaCols: ["C", "D", "E", "F", "G"]
+  });
 
   if (typeof closeStatusBox === "function") closeStatusBox();
   ss.toast("Daten wurden erfolgreich aktualisiert!", "Fertig", 5);
 }
 
 // =========================================================================
-// 3. HILFSFUNKTION FÜR DAS SCHREIBEN & FORMATIEREN DER SHEETS
+// 3. HILFSFUNKTION FÜR DAS SCHREIBEN, FORMELN & FORMATIEREN DER SHEETS
 // =========================================================================
-function writeBuchhaltungSheet(ss, sheetName, headers, data, applyFormats, hasTotalRow = false) {
+function writeBuchhaltungSheet(ss, sheetName, headers, data, applyFormats, dynamicTotalConfig) {
   let sheet = ss.getSheetByName(sheetName);
   if (!sheet) {
     sheet = ss.insertSheet(sheetName);
@@ -420,44 +426,57 @@ function writeBuchhaltungSheet(ss, sheetName, headers, data, applyFormats, hasTo
   headerRange.setValues([headers]);
   headerRange.setBackground("#2c3e50").setFontColor("#ffffff").setFontWeight("bold");
   
-  if (data.length > 0) {
-    sheet.getRange(2, 1, data.length, headers.length).setValues(data);
+  const dataCount = data.length;
+
+  if (dataCount > 0) {
+    // 1. Datenzeilen schreiben
+    sheet.getRange(2, 1, dataCount, headers.length).setValues(data);
+
+    // 2. Dynamische Summenzeile anfügen
+    if (dynamicTotalConfig) {
+      const sumRowIdx = dataCount + 2; // Row 1 ist Header
+      
+      // Beschriftung ("Gesamtsumme") setzen
+      if (dynamicTotalConfig.textValues) {
+        sheet.getRange(sumRowIdx, dynamicTotalConfig.startTextCol, 1, dynamicTotalConfig.textValues[0].length)
+             .setValues(dynamicTotalConfig.textValues);
+      }
+      
+      // Dynamische Formel mit Semikolon (;) erzeugen und mit setFormulas eintragen
+      if (dynamicTotalConfig.formulaCols && dynamicTotalConfig.formulaCols.length > 0) {
+        const formulas = [dynamicTotalConfig.formulaCols.map(col => `=SUBTOTAL(109; ${col}2:${col}${dataCount + 1})`)];
+        sheet.getRange(sumRowIdx, dynamicTotalConfig.formulaStartCol, 1, formulas[0].length)
+             .setFormulas(formulas);
+      }
+
+      // Styling der Summenzeile
+      const sumRange = sheet.getRange(sumRowIdx, 1, 1, headers.length);
+      sumRange.setFontWeight("bold")
+              .setBackground("#e2e8f0")
+              .setBorder(true, true, true, true, null, null, "#000000", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+    }
   }
-  
-  if (applyFormats) applyFormats(sheet);
+
+  if (applyFormats) applyFormats(sheet, dataCount);
   
   sheet.setFrozenRows(1);
   
-  const totalRowsCount = data.length;
-  const dataRowsCount = hasTotalRow ? Math.max(0, totalRowsCount - 1) : totalRowsCount;
-
-  // Filter anlegen NUR auf den Datenbereich (ohne Gesamtsummenzeile),
-  // damit die Gesamtsummenzeile beim Sortieren/Filtern nicht verrutscht!
-  if (dataRowsCount > 0) {
-    const filterRange = sheet.getRange(1, 1, dataRowsCount + 1, headers.length);
+  // Filter legen wir EXKLUSIV auf den Datenbereich (ohne Summenzeile)
+  if (dataCount > 0) {
+    const filterRange = sheet.getRange(1, 1, dataCount + 1, headers.length);
     filterRange.createFilter();
-  }
 
-  // Rahmen ziehen
-  if (totalRowsCount > 0) {
+    // Rahmen um Daten + Summenzeile
+    const totalRowsCount = dynamicTotalConfig ? dataCount + 1 : dataCount;
     const fullRange = sheet.getRange(1, 1, totalRowsCount + 1, headers.length);
     fullRange.setBorder(true, true, true, true, true, true, "#000000", SpreadsheetApp.BorderStyle.SOLID);
-  }
-
-  // Hervorhebung der Gesamtsummenzeile (falls vorhanden)
-  if (hasTotalRow && totalRowsCount > 0) {
-    const sumRowIndex = totalRowsCount + 1; // Row 1 is Header
-    const sumRange = sheet.getRange(sumRowIndex, 1, 1, headers.length);
-    sumRange.setFontWeight("bold")
-            .setBackground("#e2e8f0")
-            .setBorder(true, true, true, true, null, null, "#000000", SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
   }
 
   sheet.autoResizeColumns(1, headers.length);
 }
 
 // =========================================================================
-// 4. MENU-BUTTON HINZUFÜGEN
+// 4. MENU-BUTTON HINZUFÜGEN ("Update")
 // =========================================================================
 function onOpen() {
   const ui = SpreadsheetApp.getUi();
