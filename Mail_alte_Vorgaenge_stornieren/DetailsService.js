@@ -1,15 +1,27 @@
 // ==========================================
 // FILE: DetailsService.gs
 // ==========================================
-function writeDetailsSheet(ss, detailsRows) {
+
+/**
+ * Leert das Blatt "Auftragsdetails" zu Beginn eines Durchlaufs vollständig.
+ */
+function initDetailsSheet(ss) {
   let sheet = ss.getSheetByName(CONFIG.TAB_DETAILS);
   if (!sheet) {
     sheet = ss.insertSheet(CONFIG.TAB_DETAILS);
   } else {
     const currentFilter = sheet.getFilter();
     if (currentFilter) currentFilter.remove();
-    sheet.clear();
+    sheet.clear(); // Leert alle Inhalte und Formatierungen vollständig
   }
+  return sheet;
+}
+
+/**
+ * Schreibt die ermittelten Positionsdetails in das vorbereitete Tabellenblatt.
+ */
+function writeDetailsSheet(ss, detailsRows) {
+  const sheet = initDetailsSheet(ss);
 
   const headers = [
     "fldBelegNr", "fldAuftrNr", "fldArt", "fldVtrNr", "fldAdrNr",

@@ -13,11 +13,11 @@ const CONFIG = {
 
 // Vertreter-Konfiguration mit Sprache (DE/EN)
 const REPS = {
-  "28": { email: "andreas.steinert+test@nepata.de", lang: "DE", name: "Alexis" },
-  "36": { email: "andreas.steinert+test@nepata.de", lang: "DE", name: "Imad" },
-  "43": { email: "andreas.steinert+test@nepata.de", lang: "DE", name: "Andreas" },
-  "46": { email: "andreas.steinert+test@nepata.de", lang: "DE", name: "Stefanie" },
-  "56": { email: "andreas.steinert+test@nepata.de", lang: "EN", name: "Robin" },
-  "59": { email: "andreas.steinert+test@nepata.de", lang: "DE", name: "Aneta" },
-  "60": { email: "andreas.steinert+test@nepata.de", lang: "EN", name: "Rado" }
+  "28": { email: "alexis.fonte@nepata.de", lang: "DE", name: "Alexis" },
+  "36": { email: "imad.nassef@nepata.de", lang: "DE", name: "Imad" },
+  "43": { email: "andreas.steinert@nepata.de", lang: "DE", name: "Andreas" },
+  "46": { email: "stefanie.binder@nepata.de", lang: "DE", name: "Stefanie" },
+  "56": { email: "robincb@secabo.com", lang: "EN", name: "Robin" },
+  "59": { email: "aneta.nedyalkova@nepata.de", lang: "DE", name: "Aneta" },
+  "60": { email: "rado.kabakov@nepata.de", lang: "EN", name: "Rado" }
 };

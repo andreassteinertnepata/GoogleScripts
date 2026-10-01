@@ -7,10 +7,14 @@ function checkOldVorkasseAndNotify() {
 
   safeToast("Prüfe alte Vorkasse-Vorgänge...", "Start");
 
+  // Blätter vorab bereinigen
+  initDetailsSheet(ss);
+  initLogSheet(ss);
+
   // 1. Abfrage an Datahub v2
   const { belegeNachVertreter, detailsRows, totalFoundDocs } = fetchAlteVorkasseVorgaenge(startTime);
 
-  // 2. Tabellenblatt "Auftragsdetails" aktualisieren
+  // 2. Tabellenblatt "Auftragsdetails" befüllen
   writeDetailsSheet(ss, detailsRows);
 
   if (totalFoundDocs === 0) {
