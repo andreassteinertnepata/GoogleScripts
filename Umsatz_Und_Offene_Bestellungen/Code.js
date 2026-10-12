@@ -20,6 +20,7 @@ const CONFIG = {
   SHEET_ART_ORDERS_YESTERDAY: "Artikel_Bestelleingang_Gestern",
   SHEET_TODAY_ORDERS_DETAILS: "Bestelleingang_Heute_Details",
   SHEET_TODAY_REV_DETAILS: "Umsatz_Heute_Details",
+  SHEET_YESTERDAY_REV_DETAILS: "Umsatz_Gestern_Details",
   SHEET_OPEN_DOCS: "Offene_Belege",
   SHEET_OPEN_SUMMARY: "Vorgänge_Offene_Summen",
   SHEET_OPEN_DETAILS: "Offene_Bestellungen_Details",
@@ -41,7 +42,7 @@ const CONFIG = {
     "122", "123", "129", "154", "155", "156"
   ],
 
-  // Vorgangsarten für Korrekturen/Gutschriften/Erstattungen (Menge wird negativ gewertet)
+  // Vorgangsarten für Korrekturen/Gutschriften/Erstattungen (Menge & Umsatz werden negativ gewertet)
   CORRECTION_TYPES: ["90", "123", "156"],
 
   // Aktive Vorgangsarten für offene Bestellungen (Spalte C = "Vorgänge")
@@ -57,31 +58,41 @@ const MAX_EXECUTION_MS = 5.5 * 60 * 1000;
 // =========================================================================
 // ONOPEN & SYSTEM-STATUS
 // =========================================================================
-function onOpen() {
+function onOpen(e) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const lastUpdate = PropertiesService.getDocumentProperties().getProperty("LAST_UPDATE") || "Noch kein Update erfolgt";
 
   safeToast(ss, "Letztes Datahub-Update: " + lastUpdate, "System-Status");
+  updateMenuIfUiAvailable();
+}
 
+function updateMenuIfUiAvailable() {
   try {
     const ui = SpreadsheetApp.getUi();
-    ui.createMenu("Nepata Datahub")
-      .addItem("Alle Berichte aktualisieren", "main")
-      .addSeparator()
-      .addItem("Letztes Update: " + lastUpdate, "showUpdateInfo")
-      .addToUi();
+    if (ui) {
+      const lastUpdate = PropertiesService.getDocumentProperties().getProperty("LAST_UPDATE") || "Noch kein Update erfolgt";
+      ui.createMenu("Nepata Datahub")
+        .addItem("Alle Berichte aktualisieren", "main")
+        .addSeparator()
+        .addItem("Letztes Update: " + lastUpdate, "showUpdateInfo")
+        .addToUi();
+    }
   } catch (e) {
-    Logger.log("onOpen UI nicht verfügbar: " + e.toString());
+    // Geräuschlos ignorieren im zeitgesteuerten Trigger-Modus (keine Log-Verschmutzung)
   }
 }
 
 function showUpdateInfo() {
-  const lastUpdate = PropertiesService.getDocumentProperties().getProperty("LAST_UPDATE") || "Bisher kein automatischer Abruf dokumentiert.";
-  SpreadsheetApp.getUi().alert(
-    "Nepata Datahub Synchronisation",
-    "Die Berichte wurden zuletzt am " + lastUpdate + " Uhr erfolgreich aus dem Datahub aktualisiert.",
-    SpreadsheetApp.getUi().ButtonSet.OK
-  );
+  try {
+    const lastUpdate = PropertiesService.getDocumentProperties().getProperty("LAST_UPDATE") || "Bisher kein automatischer Abruf dokumentiert.";
+    SpreadsheetApp.getUi().alert(
+      "Nepata Datahub Synchronisation",
+      "Die Berichte wurden zuletzt am " + lastUpdate + " Uhr erfolgreich aus dem Datahub aktualisiert.",
+      SpreadsheetApp.getUi().ButtonSet.OK
+    );
+  } catch (e) {
+    Logger.log("Dialog konnte nicht angezeigt werden: " + e.toString());
+  }
 }
 
 // =========================================================================
@@ -107,6 +118,7 @@ function main() {
     createArticleOrderIntakeYesterdaySheet(ss, startTime);
     createTodayOrderDetailsSheet(ss, startTime);
     createTodayRevenueDetailsSheet(ss, startTime);
+    createYesterdayRevenueDetailsSheet(ss, startTime);
     createOpenDocumentsSheet(ss, startTime);
     createOpenOrderSummarySheet(ss, startTime);
     createOpenOrderDetailsSheet(ss, startTime);
@@ -120,8 +132,7 @@ function main() {
     const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd.MM.yyyy HH:mm:ss");
     PropertiesService.getDocumentProperties().setProperty("LAST_UPDATE", timestamp);
 
-    onOpen();
-
+    updateMenuIfUiAvailable();
     safeToast(ss, "Alle Berichte wurden erfolgreich aktualisiert (" + timestamp + ")!", "Fertig");
   } catch (err) {
     Logger.log("Kritischer Fehler in main(): " + err.toString());
@@ -151,6 +162,7 @@ function createTableOfContentsSheet(ss) {
     "Artikel_Bestelleingang_Gestern": "Bestelleingang",
     "Bestelleingang_Heute_Details": "Bestelleingang",
     "Umsatz_Heute_Details": "Vertrieb & Team",
+    "Umsatz_Gestern_Details": "Vertrieb & Team",
     "Offene_Belege": "Offene Vorgänge",
     "Vorgänge_Offene_Summen": "Offene Vorgänge",
     "Offene_Bestellungen_Details": "Offene Vorgänge"
@@ -190,7 +202,7 @@ function createTableOfContentsSheet(ss) {
 }
 
 // =========================================================================
-// HILFSFUNKTION: VERTRETER-AUFLÖSUNG (BELEG OR ADRESSE)
+// HILFSFUNKTIONEN: VERTRETER & STICHTAG-BERECHNUNG
 // =========================================================================
 function resolveRepInfo(node) {
   const docVtr = String(node.fldVtrNr || "").trim();
@@ -202,7 +214,6 @@ function resolveRepInfo(node) {
   return { repId: repId, repName: repName };
 }
 
-// Helper für lokales Start-Datum
 function getStartOfDayLocal(dateObj) {
   const tz = Session.getScriptTimeZone();
   const dateStr = Utilities.formatDate(dateObj, tz, "yyyy-MM-dd");
@@ -281,7 +292,6 @@ function createMonthlyDailyRevenueSheet(ss, startTime) {
     edges.forEach(edge => {
       const node = edge.node || {};
       
-      // REGEL: Storno ignorieren + NULL-Falle umgehen
       if (node.fldStorniertKz === true || node.fldSel14 === true) return;
       if (!node.fldDat) return;
 
@@ -294,32 +304,30 @@ function createMonthlyDailyRevenueSheet(ss, startTime) {
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
-        // REGEL: Nur echte Abrechnungspositionen
         if (pos.fldAbrPosKz !== true) return;
 
         let mge = pos.fldMge || 0;
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        // REGEL: Kaufmännische Vorzeichenkorrektur
-        eprNt = Math.abs(eprNt);
-        if (isCreditNote) {
-          mge = -Math.abs(mge);
-        } else {
-          mge = Math.abs(mge);
-        }
+        let lineRevenue, lineProfit, effMge;
 
-        const lineRevenue = mge * eprNt;
-        const lineProfit = lineRevenue - (mge * eekRoh);
+        if (isCreditNote) {
+          effMge = -Math.abs(mge);
+          lineRevenue = -Math.abs(mge * eprNt);
+          lineProfit = lineRevenue - (effMge * eekRoh);
+
+          dailyTotals[docDateStr].creditNotes += Math.abs(lineRevenue);
+        } else {
+          effMge = mge;
+          lineRevenue = mge * eprNt;
+          lineProfit = lineRevenue - (mge * eekRoh);
+
+          dailyTotals[docDateStr].gross += lineRevenue;
+        }
 
         dailyTotals[docDateStr].net += lineRevenue;
         dailyTotals[docDateStr].grossProfit += lineProfit;
-
-        if (isCreditNote) {
-          dailyTotals[docDateStr].creditNotes += Math.abs(lineRevenue);
-        } else {
-          dailyTotals[docDateStr].gross += lineRevenue;
-        }
         dailyTotals[docDateStr].count++;
       });
     });
@@ -358,7 +366,7 @@ function createRepRevenueSummarySheet(ss, startTime) {
 
   const now = new Date();
   const startOfDay = getStartOfDayLocal(now);
-  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
+  const startOfYesterday = getStartOfDayLocal(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const currentQuarterMonth = Math.floor(now.getMonth() / 3) * 3;
   const startOfQuarter = new Date(now.getFullYear(), currentQuarterMonth, 1);
@@ -471,15 +479,15 @@ function createRepRevenueSummarySheet(ss, startTime) {
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        eprNt = Math.abs(eprNt);
+        let rev, profit;
         if (isCreditNote) {
-          mge = -Math.abs(mge);
+          const effMge = -Math.abs(mge);
+          rev = -Math.abs(mge * eprNt);
+          profit = rev - (effMge * eekRoh);
         } else {
-          mge = Math.abs(mge);
+          rev = mge * eprNt;
+          profit = rev - (mge * eekRoh);
         }
-
-        const rev = mge * eprNt;
-        const profit = rev - (mge * eekRoh);
 
         if (docTime >= startOfDay.getTime()) {
           stats[repKey].dayRev += rev;
@@ -682,15 +690,15 @@ function createMonthlyRevenueTrendSheet(ss, startTime) {
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        eprNt = Math.abs(eprNt);
+        let rev, profit;
         if (isCreditNote) {
-          mge = -Math.abs(mge);
+          const effMge = -Math.abs(mge);
+          rev = -Math.abs(mge * eprNt);
+          profit = rev - (effMge * eekRoh);
         } else {
-          mge = Math.abs(mge);
+          rev = mge * eprNt;
+          profit = rev - (mge * eekRoh);
         }
-
-        const rev = mge * eprNt;
-        const profit = rev - (mge * eekRoh);
 
         monthlyData[yr][m].rev += rev;
         monthlyData[yr][m].profit += profit;
@@ -837,15 +845,15 @@ function createCustomerRevenueMonthYearSheet(ss, startTime) {
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        eprNt = Math.abs(eprNt);
+        let rev, profit;
         if (isCreditNote) {
-          mge = -Math.abs(mge);
+          const effMge = -Math.abs(mge);
+          rev = -Math.abs(mge * eprNt);
+          profit = rev - (effMge * eekRoh);
         } else {
-          mge = Math.abs(mge);
+          rev = mge * eprNt;
+          profit = rev - (mge * eekRoh);
         }
-
-        const rev = mge * eprNt;
-        const profit = rev - (mge * eekRoh);
 
         customerMap[custNr].revYear += rev;
         customerMap[custNr].profitYear += profit;
@@ -997,15 +1005,15 @@ function createCustomerRevenueTodaySheet(ss, startTime) {
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        eprNt = Math.abs(eprNt);
+        let rev, profit;
         if (isCreditNote) {
-          mge = -Math.abs(mge);
+          const effMge = -Math.abs(mge);
+          rev = -Math.abs(mge * eprNt);
+          profit = rev - (effMge * eekRoh);
         } else {
-          mge = Math.abs(mge);
+          rev = mge * eprNt;
+          profit = rev - (mge * eekRoh);
         }
-
-        const rev = mge * eprNt;
-        const profit = rev - (mge * eekRoh);
 
         customerMap[custNr].revToday += rev;
         customerMap[custNr].profitToday += profit;
@@ -1060,7 +1068,7 @@ function createCustomerRevenueYesterdaySheet(ss, startTime) {
 
   const now = new Date();
   const startOfDay = getStartOfDayLocal(now);
-  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
+  const startOfYesterday = getStartOfDayLocal(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
   const startOfYesterdayISO = startOfYesterday.toISOString();
 
   const customerMap = {};
@@ -1159,15 +1167,15 @@ function createCustomerRevenueYesterdaySheet(ss, startTime) {
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        eprNt = Math.abs(eprNt);
+        let rev, profit;
         if (isCreditNote) {
-          mge = -Math.abs(mge);
+          const effMge = -Math.abs(mge);
+          rev = -Math.abs(mge * eprNt);
+          profit = rev - (effMge * eekRoh);
         } else {
-          mge = Math.abs(mge);
+          rev = mge * eprNt;
+          profit = rev - (mge * eekRoh);
         }
-
-        const rev = mge * eprNt;
-        const profit = rev - (mge * eekRoh);
 
         customerMap[custNr].revYesterday += rev;
         customerMap[custNr].profitYesterday += profit;
@@ -1244,6 +1252,7 @@ function createCustomerOrderIntakeTodaySheet(ss, startTime) {
               fldReNa2
               fldVtrNr
               fldDat
+              fldStorniertKz
               fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
@@ -1275,7 +1284,7 @@ function createCustomerOrderIntakeTodaySheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldSel14 === true) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
 
       let custNr = String(node.fldAdrNr || "").trim();
       let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
@@ -1304,7 +1313,7 @@ function createCustomerOrderIntakeTodaySheet(ss, startTime) {
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
         const mge = pos.fldMge || 0;
-        const eprNt = Math.abs(pos.fldEPrNt || 0);
+        const eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -1363,7 +1372,7 @@ function createCustomerOrderIntakeYesterdaySheet(ss, startTime) {
 
   const now = new Date();
   const startOfDay = getStartOfDayLocal(now);
-  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
+  const startOfYesterday = getStartOfDayLocal(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
   const formattedVorgangCodes = allVorgangCodes.map(code => ({ string: code }));
@@ -1386,6 +1395,7 @@ function createCustomerOrderIntakeYesterdaySheet(ss, startTime) {
               fldReNa2
               fldVtrNr
               fldDat
+              fldStorniertKz
               fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
@@ -1417,7 +1427,7 @@ function createCustomerOrderIntakeYesterdaySheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldSel14 === true) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
 
       let custNr = String(node.fldAdrNr || "").trim();
       let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
@@ -1446,7 +1456,7 @@ function createCustomerOrderIntakeYesterdaySheet(ss, startTime) {
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
         const mge = pos.fldMge || 0;
-        const eprNt = Math.abs(pos.fldEPrNt || 0);
+        const eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -1583,15 +1593,16 @@ function createArticleRevenueTodaySheet(ss, startTime) {
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        eprNt = Math.abs(eprNt);
+        let rev, profit, effMge;
         if (isCreditNote) {
-          mge = -Math.abs(mge);
+          effMge = -Math.abs(mge);
+          rev = -Math.abs(mge * eprNt);
+          profit = rev - (effMge * eekRoh);
         } else {
-          mge = Math.abs(mge);
+          effMge = mge;
+          rev = mge * eprNt;
+          profit = rev - (mge * eekRoh);
         }
-
-        const rev = mge * eprNt;
-        const profit = rev - (mge * eekRoh);
 
         if (!articleMap[artNr]) {
           articleMap[artNr] = {
@@ -1604,12 +1615,12 @@ function createArticleRevenueTodaySheet(ss, startTime) {
         const aObj = articleMap[artNr];
         aObj.revToday += rev;
         aObj.profitToday += profit;
-        aObj.qtyToday += mge;
+        aObj.qtyToday += effMge;
         aObj.countToday++;
 
         sumTodayRev += rev;
         sumTodayProfit += profit;
-        sumTodayQty += mge;
+        sumTodayQty += effMge;
         sumTodayCount++;
       });
     });
@@ -1659,7 +1670,7 @@ function createArticleRevenueYesterdaySheet(ss, startTime) {
 
   const now = new Date();
   const startOfDay = getStartOfDayLocal(now);
-  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
+  const startOfYesterday = getStartOfDayLocal(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
   const startOfYesterdayISO = startOfYesterday.toISOString();
 
   const articleMap = {};
@@ -1738,15 +1749,16 @@ function createArticleRevenueYesterdaySheet(ss, startTime) {
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        eprNt = Math.abs(eprNt);
+        let rev, profit, effMge;
         if (isCreditNote) {
-          mge = -Math.abs(mge);
+          effMge = -Math.abs(mge);
+          rev = -Math.abs(mge * eprNt);
+          profit = rev - (effMge * eekRoh);
         } else {
-          mge = Math.abs(mge);
+          effMge = mge;
+          rev = mge * eprNt;
+          profit = rev - (mge * eekRoh);
         }
-
-        const rev = mge * eprNt;
-        const profit = rev - (mge * eekRoh);
 
         if (!articleMap[artNr]) {
           articleMap[artNr] = {
@@ -1759,12 +1771,12 @@ function createArticleRevenueYesterdaySheet(ss, startTime) {
         const aObj = articleMap[artNr];
         aObj.revYesterday += rev;
         aObj.profitYesterday += profit;
-        aObj.qtyYesterday += mge;
+        aObj.qtyYesterday += effMge;
         aObj.countYesterday++;
 
-        sumYestRev += val;
+        sumYestRev += rev;
         sumYestProfit += profit;
-        sumYestQty += mge;
+        sumYestQty += effMge;
         sumYestCount++;
       });
     });
@@ -1832,6 +1844,7 @@ function createArticleOrderIntakeTodaySheet(ss, startTime) {
           edges {
             node {
               fldDat
+              fldStorniertKz
               fldSel14
               rowsPositions {
                 fldArtNr
@@ -1864,7 +1877,7 @@ function createArticleOrderIntakeTodaySheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldSel14 === true) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
 
       const docTime = node.fldDat ? new Date(node.fldDat).getTime() : 0;
       if (docTime < startOfDay.getTime()) return;
@@ -1875,7 +1888,7 @@ function createArticleOrderIntakeTodaySheet(ss, startTime) {
         if (!artNr) artNr = "SONSTIGE";
 
         const mge = pos.fldMge || 0;
-        const eprNt = Math.abs(pos.fldEPrNt || 0);
+        const eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -1945,7 +1958,7 @@ function createArticleOrderIntakeYesterdaySheet(ss, startTime) {
 
   const now = new Date();
   const startOfDay = getStartOfDayLocal(now);
-  const startOfYesterday = new Date(startOfDay.getTime() - 24 * 60 * 60 * 1000);
+  const startOfYesterday = getStartOfDayLocal(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
 
   const allVorgangCodes = [...CONFIG.PROCESS_TYPES.PAID, ...CONFIG.PROCESS_TYPES.UNPAID];
   const formattedVorgangCodes = allVorgangCodes.map(code => ({ string: code }));
@@ -1964,6 +1977,7 @@ function createArticleOrderIntakeYesterdaySheet(ss, startTime) {
           edges {
             node {
               fldDat
+              fldStorniertKz
               fldSel14
               rowsPositions {
                 fldArtNr
@@ -1996,7 +2010,7 @@ function createArticleOrderIntakeYesterdaySheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldSel14 === true) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
 
       const docTime = node.fldDat ? new Date(node.fldDat).getTime() : 0;
       if (docTime < startOfYesterday.getTime() || docTime >= startOfDay.getTime()) return;
@@ -2007,7 +2021,7 @@ function createArticleOrderIntakeYesterdaySheet(ss, startTime) {
         if (!artNr) artNr = "SONSTIGE";
 
         const mge = pos.fldMge || 0;
-        const eprNt = Math.abs(pos.fldEPrNt || 0);
+        const eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -2097,6 +2111,7 @@ function createTodayOrderDetailsSheet(ss, startTime) {
               lblArt
               fldDat
               fldLiefDat
+              fldStorniertKz
               fldVtrNr
               fldAdrNr
               fldReNa1
@@ -2144,7 +2159,7 @@ function createTodayOrderDetailsSheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldSel14 === true) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
 
       const docTime = node.fldDat ? new Date(node.fldDat).getTime() : 0;
       if (docTime < startOfDay.getTime()) return;
@@ -2166,7 +2181,7 @@ function createTodayOrderDetailsSheet(ss, startTime) {
         if (!artNr) artNr = "SONSTIGE";
 
         const qty = pos.fldMge || 0;
-        const unitPrice = Math.abs(pos.fldEPrNt || 0);
+        const unitPrice = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
         const totalPrice = qty * unitPrice;
         const profit = totalPrice - (qty * eekRoh);
@@ -2323,15 +2338,17 @@ function createTodayRevenueDetailsSheet(ss, startTime) {
         let eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
-        eprNt = Math.abs(eprNt);
+        let lineRevenue, lineProfit, effMge;
         if (isCreditNote) {
-          mge = -Math.abs(mge);
+          effMge = -Math.abs(mge);
+          lineRevenue = -Math.abs(mge * eprNt);
+          lineProfit = lineRevenue - (effMge * eekRoh);
         } else {
-          mge = Math.abs(mge);
+          effMge = mge;
+          lineRevenue = mge * eprNt;
+          lineProfit = lineRevenue - (mge * eekRoh);
         }
 
-        const lineRevenue = mge * eprNt;
-        const lineProfit = lineRevenue - (mge * eekRoh);
         const margin = lineRevenue !== 0 ? lineProfit / lineRevenue : 0;
 
         rows.push([
@@ -2347,7 +2364,7 @@ function createTodayRevenueDetailsSheet(ss, startTime) {
           custName,
           artNr,
           pos.rowArtikel?.fldKuBez1 || (artNr === "SONSTIGE" ? "Sonderposition / Sonstige" : artNr),
-          mge,
+          effMge,
           eprNt,
           lineRevenue,
           lineProfit,
@@ -2376,7 +2393,171 @@ function createTodayRevenueDetailsSheet(ss, startTime) {
 }
 
 // =========================================================================
-// 15. OFFENE BELEGE GRUPPIERT NACH VORGANGSART
+// 15. UMSATZ GESTERN DETAILS (POSITIONSEBENE)
+// =========================================================================
+function createYesterdayRevenueDetailsSheet(ss, startTime) {
+  let sheet = prepareSheet(ss, CONFIG.SHEET_YESTERDAY_REV_DETAILS);
+
+  const now = new Date();
+  const startOfDay = getStartOfDayLocal(now);
+  const startOfYesterday = getStartOfDayLocal(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  const startOfYesterdayISO = startOfYesterday.toISOString();
+
+  const formattedArchiveTypes = CONFIG.ARCHIVE_TYPES.map(type => ({ string: type }));
+
+  const query = `
+    query GetYesterdayRevenueDetails($startISO: DateTime!, $types: [FilterValue!]!, $cursor: String) {
+      tblVorgangArchiv {
+        conRead(
+          first: 100,
+          after: $cursor,
+          fastFilter: {
+            and: [
+              { ge: [{ field: fldDat }, { value: { datetime: $startISO } }] },
+              { in: { field: fldArt, values: $types } }
+            ]
+          }
+        ) {
+          edges {
+            node {
+              fldBelegNr
+              fldAuftrNr
+              fldArt
+              lblArt
+              fldDat
+              fldLiefDat
+              fldStorniertKz
+              fldSel14
+              fldVtrNr
+              fldAdrNr
+              fldReNa1
+              fldReNa2
+              rowAdresse { fldVtrNr }
+              rowsPositions {
+                fldArtNr
+                fldMge
+                fldEPrNt
+                fldEEkRoh
+                fldAbrPosKz
+                rowArtikel {
+                  fldKuBez1
+                }
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    }
+  `;
+
+  const headers = [
+    "Belegdatum", "Lieferdatum", "Beleg-Nr.", "Auftrags-Nr.", "Vorgangs-Code", 
+    "Vorgangsart", "Vertreter-ID", "Vertreter Name", "Kunden-Nr.", 
+    "Kundenname", "Artikel-Nr.", "Artikelbezeichnung", "Menge", 
+    "Einzelpreis Netto (€)", "Gesamtpreis Netto (€)", "Rohertrag (€)", "Marge (%)"
+  ];
+  
+  const rows = [headers];
+  let hasNextPage = true;
+  let cursor = null;
+
+  while (hasNextPage) {
+    if (startTime && (Date.now() - startTime > MAX_EXECUTION_MS)) break;
+
+    const payload = { query: query, variables: { startISO: startOfYesterdayISO, types: formattedArchiveTypes, cursor: cursor } };
+    const json = callGraphQL(payload);
+    const conRead = json?.data?.tblVorgangArchiv?.conRead || {};
+    const edges = conRead.edges || [];
+
+    edges.forEach(edge => {
+      const node = edge.node || {};
+      if (node.fldStorniertKz === true || node.fldSel14 === true || !node.fldDat) return;
+
+      const docTime = new Date(node.fldDat).getTime();
+      if (docTime < startOfYesterday.getTime() || docTime >= startOfDay.getTime()) return;
+
+      const artCode = String(node.fldArt || "");
+      const belegNr = String(node.fldBelegNr || "");
+      const isCreditNote = CONFIG.CORRECTION_TYPES.includes(artCode) || belegNr.startsWith("123");
+
+      const repInfo = resolveRepInfo(node);
+      let custNr = String(node.fldAdrNr || "").trim();
+      let custName = String(node.fldReNa2 || node.fldReNa1 || "").trim();
+
+      if (!custNr) custNr = "OHNE_KUNDENNR";
+      if (!custName) custName = "Ohne Kundennummer (Gast/Laufkunde)";
+
+      const positions = node.rowsPositions || [];
+      positions.forEach(pos => {
+        if (pos.fldAbrPosKz !== true) return;
+
+        let artNr = String(pos.fldArtNr || "").trim();
+        if (!artNr) artNr = "SONSTIGE";
+
+        let mge = pos.fldMge || 0;
+        let eprNt = pos.fldEPrNt || 0;
+        const eekRoh = pos.fldEEkRoh || 0;
+
+        let lineRevenue, lineProfit, effMge;
+        if (isCreditNote) {
+          effMge = -Math.abs(mge);
+          lineRevenue = -Math.abs(mge * eprNt);
+          lineProfit = lineRevenue - (effMge * eekRoh);
+        } else {
+          effMge = mge;
+          lineRevenue = mge * eprNt;
+          lineProfit = lineRevenue - (mge * eekRoh);
+        }
+
+        const margin = lineRevenue !== 0 ? lineProfit / lineRevenue : 0;
+
+        rows.push([
+          node.fldDat ? new Date(node.fldDat) : "",
+          node.fldLiefDat ? new Date(node.fldLiefDat) : "",
+          belegNr,
+          node.fldAuftrNr || "",
+          artCode,
+          node.lblArt || artCode,
+          repInfo.repId,
+          repInfo.repName,
+          custNr,
+          custName,
+          artNr,
+          pos.rowArtikel?.fldKuBez1 || (artNr === "SONSTIGE" ? "Sonderposition / Sonstige" : artNr),
+          effMge,
+          eprNt,
+          lineRevenue,
+          lineProfit,
+          margin
+        ]);
+      });
+    });
+
+    hasNextPage = conRead.pageInfo?.hasNextPage || false;
+    cursor = conRead.pageInfo?.endCursor || null;
+  }
+
+  writeToSheet(sheet, rows);
+  
+  sheet.getRange("C:F").setNumberFormat("@");
+  sheet.getRange("G:G").setNumberFormat("@");
+  sheet.getRange("I:I").setNumberFormat("@");
+  sheet.getRange("K:K").setNumberFormat("@");
+
+  if (rows.length > 1) {
+    sheet.getRange(2, 1, rows.length - 1, 2).setNumberFormat("yyyy-mm-dd");
+    sheet.getRange(2, 13, rows.length - 1, 1).setNumberFormat("#,##0");
+    sheet.getRange(2, 14, rows.length - 1, 3).setNumberFormat("#,##0.00 €");
+    sheet.getRange(2, 17, rows.length - 1, 1).setNumberFormat("0.00%");
+  }
+}
+
+// =========================================================================
+// 16. OFFENE BELEGE GRUPPIERT NACH VORGANGSART
 // =========================================================================
 function createOpenDocumentsSheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_DOCS);
@@ -2397,6 +2578,7 @@ function createOpenDocumentsSheet(ss, startTime) {
               fldBelegNr
               fldArt
               lblArt
+              fldStorniertKz
               fldSel14
               rowsPositions {
                 fldMge
@@ -2431,7 +2613,7 @@ function createOpenDocumentsSheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldSel14 === true) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
 
       const artCode = String(node.fldArt || "").trim();
       if (!artCode) return;
@@ -2455,7 +2637,7 @@ function createOpenDocumentsSheet(ss, startTime) {
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
         const mge = pos.fldMge || 0;
-        const eprNt = Math.abs(pos.fldEPrNt || 0);
+        const eprNt = pos.fldEPrNt || 0;
         const eekRoh = pos.fldEEkRoh || 0;
 
         const val = mge * eprNt;
@@ -2537,7 +2719,7 @@ function createOpenDocumentsSheet(ss, startTime) {
 }
 
 // =========================================================================
-// 16. VORGÄNGE OFFENE SUMMEN
+// 17. VORGÄNGE OFFENE SUMMEN
 // =========================================================================
 function createOpenOrderSummarySheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_SUMMARY);
@@ -2557,6 +2739,7 @@ function createOpenOrderSummarySheet(ss, startTime) {
             node {
               fldArt
               fldVtrNr
+              fldStorniertKz
               fldSel14
               rowAdresse { fldVtrNr }
               rowsPositions {
@@ -2595,7 +2778,7 @@ function createOpenOrderSummarySheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldSel14 === true) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
 
       const artCode = String(node.fldArt || "");
       const isPaid = CONFIG.PROCESS_TYPES.PAID.includes(artCode);
@@ -2604,7 +2787,7 @@ function createOpenOrderSummarySheet(ss, startTime) {
 
       const positions = node.rowsPositions || [];
       positions.forEach(pos => {
-        const lineTotal = (pos.fldMge || 0) * Math.abs(pos.fldEPrNt || 0); 
+        const lineTotal = (pos.fldMge || 0) * (pos.fldEPrNt || 0); 
         if (isPaid) {
           repSummary[repKey].paidAmount += lineTotal;
           totalPaid += lineTotal;
@@ -2645,7 +2828,7 @@ function createOpenOrderSummarySheet(ss, startTime) {
 }
 
 // =========================================================================
-// 17. OFFENE BESTELLUNGEN DETAILS
+// 18. OFFENE BESTELLUNGEN DETAILS
 // =========================================================================
 function createOpenOrderDetailsSheet(ss, startTime) {
   let sheet = prepareSheet(ss, CONFIG.SHEET_OPEN_DETAILS);
@@ -2669,6 +2852,7 @@ function createOpenOrderDetailsSheet(ss, startTime) {
               lblArt
               fldDat
               fldLiefDat
+              fldStorniertKz
               fldVtrNr
               fldAdrNr
               fldReNa1
@@ -2718,7 +2902,7 @@ function createOpenOrderDetailsSheet(ss, startTime) {
 
     edges.forEach(edge => {
       const node = edge.node || {};
-      if (node.fldSel14 === true) return;
+      if (node.fldStorniertKz === true || node.fldSel14 === true) return;
 
       const artCode = String(node.fldArt || "");
       const isPaid = CONFIG.PROCESS_TYPES.PAID.includes(artCode);
@@ -2738,7 +2922,7 @@ function createOpenOrderDetailsSheet(ss, startTime) {
 
         const qty = pos.fldMge || 0;
         const oQty = pos.fldOMge || 0;
-        const unitPrice = Math.abs(pos.fldEPrNt || 0);
+        const unitPrice = pos.fldEPrNt || 0;
         const totalPrice = qty * unitPrice;
 
         rows.push([
@@ -2857,7 +3041,9 @@ function applyGlobalFormatting(ss) {
 
 function safeToast(ss, message, title) {
   try {
-    ss.toast(message, title, 5);
+    if (ss) {
+      ss.toast(message, title, 5);
+    }
   } catch (e) {
     Logger.log(`[${title}] ${message}`);
   }
